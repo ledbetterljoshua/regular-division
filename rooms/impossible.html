@@ -1,0 +1,894 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Impossible Objects</title>
+<link rel="stylesheet" href="../studio.css">
+<style>
+  :root {
+    --print: #7d93a3;          /* cool stone grey-blue */
+    --brick: #a6452e;          /* the one red */
+    --plate-paper: #e6e2d5;
+    --plate-ink: #1c232b;
+  }
+  body { background: var(--plate-paper); }
+  .plate { cursor: grab; outline: none; }
+  .plate.dragging { cursor: grabbing; }
+  .plate:focus-visible { outline: 2px solid var(--brick); outline-offset: -6px; }
+  #marks { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+
+  .hud {
+    position: absolute; z-index: 4;
+    top: max(16px, env(safe-area-inset-top, 0px)); right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+    pointer-events: none;
+  }
+  .hud-state {
+    display: flex; align-items: center; gap: 9px;
+    font: 500 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+    color: var(--plate-ink); background: color-mix(in oklab, var(--plate-paper) 86%, transparent);
+    border: 1px solid color-mix(in oklab, var(--plate-ink) 30%, transparent);
+    padding: 8px 11px;
+    transition: border-color .3s, color .3s;
+  }
+  .hud-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--print); box-shadow: 0 0 0 0 transparent; transition: background .25s; }
+  .hud[data-state="strain"] .hud-dot { background: #c08a3c; }
+  .hud[data-state="broken"] .hud-dot { background: var(--brick); }
+  .hud[data-state="broken"] .hud-state { color: var(--brick); border-color: color-mix(in oklab, var(--brick) 55%, transparent); }
+  .hud.pulse .hud-dot { animation: pulse .7s ease-out; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(125,147,163,.9); } 100% { box-shadow: 0 0 0 12px rgba(125,147,163,0); } }
+  .hud-gap { font: 400 11px/1.3 var(--mono); color: color-mix(in oklab, var(--plate-ink) 70%, transparent); padding-right: 2px; }
+  .hint {
+    position: absolute; z-index: 3; pointer-events: none;
+    font: italic 400 15px/1.3 var(--serif); color: color-mix(in oklab, var(--plate-ink) 62%, transparent);
+    transition: opacity .8s;
+  }
+  .hint.gone { opacity: 0; }
+
+  .rail .seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .rail .seg.two { grid-template-columns: 1fr 1fr; }
+  .rail .seg .btn { padding: 9px 6px; text-align: center; }
+  .btn.reveal { width: 100%; padding: 11px 10px; letter-spacing: .1em; text-transform: uppercase; }
+  .btn.reveal:disabled { opacity: .55; cursor: default; }
+  .readout { display: flex; justify-content: space-between; gap: 10px; }
+  .readout b { font-weight: 500; color: var(--paper); }
+  .note b { font-style: normal; color: var(--paper); font-weight: 500; }
+  .hidden { display: none !important; }
+  @media (max-width: 720px) {
+    .hint { font-size: 13px; }
+    .rail { gap: 12px; }
+    .lede { font-size: 14px; }
+  }
+</style>
+</head>
+<body>
+<div class="room">
+  <canvas class="plate" id="plate" tabindex="0" aria-label="A three-dimensional impossible object. Drag or use arrow keys to move your eye around it."></canvas>
+  <canvas id="marks" aria-hidden="true"></canvas>
+  <div class="hud" id="hud" data-state="hold" aria-live="polite">
+    <div class="hud-state"><span class="hud-dot"></span><span id="hudText">Illusion holds</span></div>
+    <div class="hud-gap" id="hudGap">seam 0.0 px apart</div>
+  </div>
+  <div class="hint" id="hint">drag to move your eye</div>
+
+  <aside class="rail" id="rail">
+    <div class="rail-head"><a class="back" href="../index.html">← Studio</a>
+      <button class="toggle" id="railToggle" aria-expanded="true">hide</button></div>
+    <h1 class="room-title">Impossible <em>Objects</em></h1>
+    <p class="lede">In 1958 Lionel and Roger Penrose published an impossible staircase and an impossible tribar in the <i>British Journal of Psychology</i>; Escher built prints on both around 1960–61. On paper an impossible object only has to be drawn from one viewpoint. Built in 3D it is a <b>real object that closes from exactly one</b> — here it is built, and your eye is free to move.</p>
+
+    <div class="group">
+      <span class="label">Object</span>
+      <div class="seg" role="group" aria-label="Object">
+        <button class="btn" data-scene="0" aria-pressed="true">Stair</button>
+        <button class="btn" data-scene="1" aria-pressed="false">Tribar</button>
+        <button class="btn" data-scene="2" aria-pressed="false">Crate</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <span class="label">Your eye</span>
+      <div class="seg two" role="group" aria-label="Eye mode">
+        <button class="btn" id="modeHold" aria-pressed="true">Hold illusion</button>
+        <button class="btn" id="modeFree" aria-pressed="false">Free orbit</button>
+      </div>
+      <button class="btn reveal" id="reveal">Reveal the trick</button>
+    </div>
+
+    <div class="group" id="walkGroup">
+      <span class="label">Wind-up walkers</span>
+      <div class="row">
+        <button class="btn" id="walkToggle" aria-pressed="true">walking</button>
+        <input type="range" id="walkSpeed" min="0.3" max="2.2" step="0.05" value="1" aria-label="Walking speed" style="flex:1;width:auto">
+      </div>
+    </div>
+
+    <div class="group">
+      <span class="label">What is really there</span>
+      <p class="note" id="sceneNote"></p>
+      <div class="math readout"><span>eye off magic view</span><b id="rdAngle">0.00°</b></div>
+      <div class="math readout"><span>seam gap on screen</span><b id="rdGap">0.0 px</b></div>
+    </div>
+  </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+'use strict';
+const V3 = THREE.Vector3;
+const $ = (s) => document.querySelector(s);
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const DEG = Math.PI / 180;
+
+/* ---------------------------------------------------------------- palette */
+const C = (h) => new THREE.Color(h);
+const PAL = {
+  paper: '#e6e2d5', ink: '#1c232b', grid: '#7d93a3', brick: '#a6452e',
+  stone: ['#e3e3dc', '#a7b5bf', '#71889a'],
+  toy:   ['#f4f0e5', '#dcd6c7', '#aab1b3'],
+  key:   ['#c0593f', '#a6452e', '#7a3021'],
+};
+
+/* ---------------------------------------------------------------- renderer */
+const canvas = $('#plate');
+const marks = $('#marks');
+const mctx = marks.getContext('2d');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
+renderer.autoClear = false;
+renderer.setClearColor(C(PAL.paper), 1);
+let DPR = Math.min(2, window.devicePixelRatio || 1);
+renderer.setPixelRatio(DPR);
+const SS = () => (DPR < 1.5 ? 2 : 1);     // supersample the line buffer on 1x screens
+
+const rtN = new THREE.WebGLRenderTarget(4, 4, {
+  minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: true,
+});
+
+/* ---------------------------------------------------------------- shared uniforms */
+const U = {
+  uLight: { value: new V3(0, 1, 0) },
+  uH1: { value: new V3(1, 0, 0) },
+  uH2: { value: new V3(0, 0, 1) },
+  uSp: { value: 0.1 },
+  uInk: { value: C(PAL.ink) },
+};
+
+const toneVS = `
+  varying vec3 vN; varying vec3 vW;
+  void main(){
+    vec4 w = modelMatrix * vec4(position, 1.0);
+    vW = w.xyz;
+    vN = normalize(mat3(modelMatrix) * normal);
+    gl_Position = projectionMatrix * viewMatrix * w;
+  }`;
+// Hatching runs along world directions perpendicular to the magic line of sight,
+// so the two halves of a cut object hatch identically however far apart they are.
+const toneFS = `
+  uniform vec3 uLight, uH1, uH2, uC0, uC1, uC2, uInk;
+  uniform float uSp, uHatchK;
+  varying vec3 vN; varying vec3 vW;
+  float line(float s, float hw){
+    float aa = fwidth(s) * 0.8;
+    float d = abs(fract(s) - 0.5);
+    return 1.0 - smoothstep(hw - aa, hw + aa, d);
+  }
+  void main(){
+    vec3 n = normalize(vN);
+    float l = dot(n, uLight);
+    float a = dot(vW, uH1) / uSp;
+    float b = dot(vW, uH2) / uSp;
+    a += 0.22 * sin(b * 0.21) + 0.08 * sin(b * 0.9 + a * 0.05);
+    b += 0.18 * sin(a * 0.17);
+    vec3 col; float ink = 0.0;
+    if (l > 0.62) { col = uC0; }
+    else if (l > 0.18) { col = uC1; ink = line(a, 0.12) * 0.62; }
+    else { col = uC2; ink = max(line(a, 0.17) * 0.9, line(b, 0.11) * 0.75); }
+    col = mix(col, uInk, ink * uHatchK);
+    gl_FragColor = vec4(col, 1.0);
+  }`;
+
+function toneMat(cols, hatchK = 1) {
+  const m = new THREE.ShaderMaterial({
+    uniforms: {
+      uLight: U.uLight, uH1: U.uH1, uH2: U.uH2, uSp: U.uSp, uInk: U.uInk,
+      uC0: { value: C(cols[0]) }, uC1: { value: C(cols[1]) }, uC2: { value: C(cols[2]) },
+      uHatchK: { value: hatchK },
+    },
+    vertexShader: toneVS, fragmentShader: toneFS,
+  });
+  m.extensions = { derivatives: true };
+  return m;
+}
+const stoneMat = toneMat(PAL.stone);
+const toyMat = toneMat(PAL.toy, 0.7);
+const keyMat = toneMat(PAL.key, 0.6);
+const inkMat = new THREE.MeshBasicMaterial({ color: C(PAL.ink) });
+
+// line buffer: world normal + surface id. Ink lines are drawn where either changes.
+const idMat = new THREE.ShaderMaterial({
+  vertexShader: `
+    attribute float aId; varying vec3 vN; varying float vId;
+    void main(){ vN = normalize(mat3(modelMatrix) * normal); vId = aId;
+      gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    varying vec3 vN; varying float vId;
+    void main(){ gl_FragColor = vec4(normalize(vN) * 0.5 + 0.5, vId / 255.0); }`,
+  blending: THREE.NoBlending,
+});
+
+/* ---------------------------------------------------------------- screen passes */
+const screenCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const quad = new THREE.PlaneGeometry(2, 2);
+const bgMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uRes: { value: new THREE.Vector2(1, 1) }, uDpr: { value: 1 },
+    uPaper: { value: C(PAL.paper) }, uGrid: { value: C(PAL.grid) }, uC: { value: new THREE.Vector2(0, 0) },
+  },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: `
+    uniform vec2 uRes, uC; uniform float uDpr; uniform vec3 uPaper, uGrid; varying vec2 vUv;
+    float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    float gl(vec2 p, vec2 n, float g){ float s = dot(p, n) / g; float d = abs(fract(s + 0.5) - 0.5) * g; return 1.0 - smoothstep(0.35, 1.05, d); }
+    void main(){
+      vec2 px = gl_FragCoord.xy / uDpr;
+      vec2 p = px - uC;
+      float g = 34.0;
+      float l = max(gl(p, vec2(1.0, 0.0), g), max(gl(p, vec2(0.5, 0.8660254), g), gl(p, vec2(-0.5, 0.8660254), g)));
+      vec3 col = mix(uPaper, uGrid, l * 0.16);
+      float r = length((vUv - 0.5) * vec2(uRes.x / uRes.y, 1.0));
+      col *= 1.0 - 0.10 * smoothstep(0.35, 1.05, r);
+      col += (h(floor(px * 1.0)) - 0.5) * 0.028;
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+  depthTest: false, depthWrite: false,
+});
+const bgScene = new THREE.Scene(); bgScene.add(new THREE.Mesh(quad, bgMat));
+
+const edgeMat = new THREE.ShaderMaterial({
+  uniforms: { tN: { value: rtN.texture }, uPx: { value: new THREE.Vector2(1, 1) }, uR: { value: 1.5 }, uInk: U.uInk },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tN; uniform vec2 uPx; uniform float uR; uniform vec3 uInk; varying vec2 vUv;
+    float diff(vec4 a, vec4 b){
+      float dn = length(a.rgb - b.rgb);
+      float di = abs(a.a - b.a) * 255.0;
+      return clamp(max((dn - 0.18) * 6.0, (di - 0.35) * 3.0), 0.0, 1.0);
+    }
+    void main(){
+      vec4 c = texture2D(tN, vUv);
+      float e = 0.0, s = 0.0;
+      for (int i = 0; i < 8; i++) {
+        float a = float(i) * 0.7853982;
+        vec2 d = vec2(cos(a), sin(a));
+        e += diff(c, texture2D(tN, vUv + d * uR * uPx));
+        vec4 f = texture2D(tN, vUv + d * uR * 1.9 * uPx);
+        s += abs(step(0.5 / 255.0, f.a) - step(0.5 / 255.0, c.a));
+      }
+      float k = max(clamp(e / 2.2, 0.0, 1.0), clamp(s / 2.5, 0.0, 1.0));
+      gl_FragColor = vec4(uInk, k * 0.94);
+    }`,
+  transparent: true, depthTest: false, depthWrite: false,
+});
+const edgeScene = new THREE.Scene(); edgeScene.add(new THREE.Mesh(quad, edgeMat));
+
+/* ---------------------------------------------------------------- geometry kit */
+// Convex pieces are lists of planar faces; a cut by a plane that contains the magic
+// line of sight is seen edge-on from there, so cut faces never show.
+function boxFaces(x0, y0, z0, x1, y1, z1) {
+  const P = (x, y, z) => new V3(x, y, z);
+  return [
+    [P(x1, y0, z0), P(x1, y1, z0), P(x1, y1, z1), P(x1, y0, z1)],
+    [P(x0, y0, z0), P(x0, y0, z1), P(x0, y1, z1), P(x0, y1, z0)],
+    [P(x0, y1, z0), P(x0, y1, z1), P(x1, y1, z1), P(x1, y1, z0)],
+    [P(x0, y0, z0), P(x1, y0, z0), P(x1, y0, z1), P(x0, y0, z1)],
+    [P(x0, y0, z1), P(x1, y0, z1), P(x1, y1, z1), P(x0, y1, z1)],
+    [P(x0, y0, z0), P(x0, y1, z0), P(x1, y1, z0), P(x1, y0, z0)],
+  ];
+}
+function clipFaces(faces, n, q, keepSign) {
+  // keep points where keepSign * n·(p - q) >= 0
+  const nn = n.clone().multiplyScalar(keepSign);
+  const d = -nn.dot(q);
+  const out = [], cap = [];
+  for (const f of faces) {
+    const res = [];
+    for (let i = 0; i < f.length; i++) {
+      const a = f[i], b = f[(i + 1) % f.length];
+      const da = nn.dot(a) + d, db = nn.dot(b) + d;
+      if (da >= 0) res.push(a);
+      if ((da >= 0) !== (db >= 0)) {
+        const p = a.clone().lerp(b, da / (da - db));
+        res.push(p); cap.push(p);
+      }
+    }
+    if (res.length >= 3) out.push(res);
+  }
+  const uniq = [];
+  for (const p of cap) if (!uniq.some((u) => u.distanceToSquared(p) < 1e-12)) uniq.push(p);
+  if (uniq.length >= 3) {
+    const c = uniq.reduce((s, p) => s.add(p), new V3()).multiplyScalar(1 / uniq.length);
+    const tmp = Math.abs(nn.x) < 0.9 ? new V3(1, 0, 0) : new V3(0, 1, 0);
+    const e1 = tmp.clone().cross(nn).normalize(), e2 = nn.clone().cross(e1);
+    const ang = (p) => { const v = p.clone().sub(c); return Math.atan2(v.dot(e2), v.dot(e1)); };
+    uniq.sort((a, b) => ang(a) - ang(b));
+    out.push(uniq.reverse());
+  }
+  return out;
+}
+const shiftFaces = (faces, v) => faces.map((f) => f.map((p) => p.clone().add(v)));
+
+function facesToGeometry(pieces) {
+  const pos = [], nor = [], ids = [];
+  for (const { faces, id } of pieces) {
+    for (const f of faces) {
+      const n = new V3();
+      for (let i = 0; i < f.length; i++) {
+        const a = f[i], b = f[(i + 1) % f.length];
+        n.x += (a.y - b.y) * (a.z + b.z); n.y += (a.z - b.z) * (a.x + b.x); n.z += (a.x - b.x) * (a.y + b.y);
+      }
+      if (n.lengthSq() < 1e-14) continue;
+      n.normalize();
+      for (let i = 1; i < f.length - 1; i++) {
+        for (const p of [f[0], f[i], f[i + 1]]) { pos.push(p.x, p.y, p.z); nor.push(n.x, n.y, n.z); ids.push(id); }
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('aId', new THREE.Float32BufferAttribute(ids, 1));
+  return g;
+}
+function withId(g, id) {
+  const n = g.attributes.position.count;
+  g.setAttribute('aId', new THREE.Float32BufferAttribute(new Float32Array(n).fill(id), 1));
+  return g;
+}
+const sph = (az, el) => new V3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az));
+function magicBasis(v) {
+  const r = new V3(0, 1, 0).cross(v).normalize();
+  const u = v.clone().cross(r).normalize();
+  return { r, u };
+}
+// best cut plane through q containing the sight line v, crossing a beam that runs along d
+const cutNormal = (d, v) => d.clone().sub(v.clone().multiplyScalar(d.dot(v))).normalize();
+
+/* ---------------------------------------------------------------- scene 1: endless stair */
+function buildStair() {
+  const t = 1, w = 2, D = 2.3, s = 0.45, A = 7, B = 2;
+  const X = [1, 0], NX = [-1, 0], Z = [0, 1], NZ = [0, -1];
+  const seq = [];
+  const flight = (d, n) => { for (let i = 0; i < n; i++) seq.push({ land: false, d }); };
+  const land = (d, nd) => seq.push({ land: true, d, nd });
+  // start just after the seam, which sits inside the short far-left flight (it climbs away from the eye)
+  flight(NZ, B - 1); land(NZ, X); flight(X, A); land(X, Z); flight(Z, A); land(Z, NX); flight(NX, B); land(NX, NZ); flight(NZ, 1);
+  let px = 0, pz = 0;
+  const cells = seq.map((c, k) => {
+    const [dx, dz] = c.d;
+    let cx, cz, hx, hz;
+    if (!c.land) {
+      cx = px + dx * t / 2; cz = pz + dz * t / 2;
+      hx = dx ? t / 2 : w / 2; hz = dz ? t / 2 : w / 2;
+      px += dx * t; pz += dz * t;
+    } else {
+      cx = px + dx * w / 2; cz = pz + dz * w / 2; hx = hz = w / 2;
+      px = cx + c.nd[0] * w / 2; pz = cz + c.nd[1] * w / 2;
+    }
+    return { cx, cz, hx, hz, top: k * s };
+  });
+  const N = cells.length;
+  const Lam = new V3(px, N * s, pz);           // one full lap: this is the line of sight
+  const v = Lam.clone().normalize();
+  const Q = new V3(0, -s / 2, 0);
+  const n = cutNormal(new V3(0, 0, -1), v);
+  const cellFaces = (i) => {
+    const lap = Math.floor(i / N), c = cells[((i % N) + N) % N];
+    const f = boxFaces(c.cx - c.hx, c.top - D, c.cz - c.hz, c.cx + c.hx, c.top, c.cz + c.hz);
+    return lap ? shiftFaces(f, Lam.clone().multiplyScalar(lap)) : f;
+  };
+  const W = 4, pieces = [];
+  const idOf = (i) => (((i % N) + N) % N) + 1;
+  for (let i = W; i < N - W; i++) pieces.push({ faces: cellFaces(i), id: idOf(i) });
+  for (let i = -W; i < W; i++) { const f = clipFaces(cellFaces(i), n, Q, +1); if (f.length) pieces.push({ faces: f, id: idOf(i) }); }
+  for (let i = N - W; i < N + W; i++) { const f = clipFaces(cellFaces(i), n, Q, -1); if (f.length) pieces.push({ faces: f, id: idOf(i) }); }
+
+  const group = new THREE.Group();
+  group.add(new THREE.Mesh(facesToGeometry(pieces), stoneMat));
+  // walkers' path: cell centres on the treads; index N is cell 0 one lap up
+  const path = (i) => {
+    const lap = Math.floor(i / N), c = cells[((i % N) + N) % N];
+    return new V3(c.cx + Lam.x * lap, c.top + Lam.y * lap, c.cz + Lam.z * lap);
+  };
+  const H = N * s, horiz = Math.hypot(Lam.x, Lam.z);
+  return {
+    key: 'stair', group, magic: v, Lam, seamA: Q.clone(), seamB: Q.clone().add(Lam), N, path,
+    light: new V3(-0.35, 0.9, 0.55).normalize(),
+    reveal: { dAz: 60, dEl: -30 },
+    note: `${N} stone blocks, and every one is a step <b>up</b>. The last stands ${H.toFixed(1)} units above the first and ${horiz.toFixed(1)} units nearer you — exactly along your line of sight, so from here the two ends touch. The walkers are carried back down at that seam, which you cannot see.`,
+  };
+}
+
+/* ---------------------------------------------------------------- scene 2: tribar */
+function buildTribar() {
+  const L = 4.2, w = 1, h = w / 2;
+  const Lam = new V3(L, L, L), v = Lam.clone().normalize();
+  const Q = new V3(L, L, L / 2);
+  const n = cutNormal(new V3(0, 0, 1), v);
+  const bar3 = boxFaces(L - h, L - h, h, L + h, L + h, L - h);
+  const pieces = [
+    { faces: boxFaces(-h, -h, -h, L + h, h, h), id: 1 },
+    { faces: boxFaces(L - h, h, -h, L + h, L + h, h), id: 1 },
+    { faces: clipFaces(bar3, n, Q, -1), id: 1 },
+    { faces: clipFaces(shiftFaces(bar3, Lam.clone().negate()), n, Q, +1), id: 1 },
+  ];
+  const inner = new THREE.Group();
+  inner.add(new THREE.Mesh(facesToGeometry(pieces), stoneMat));
+  // turn the local (1,1,1) sight line toward +z and stand the triangle on its base
+  const rl = new V3(2, -1, -1).normalize(), ul = new V3(0, 1, -1).normalize();
+  const M = new THREE.Matrix4().makeBasis(rl, ul, v).transpose();
+  const group = new THREE.Group(); group.add(inner);
+  inner.quaternion.setFromRotationMatrix(M);
+  const toW = (p) => p.clone().applyQuaternion(inner.quaternion);
+  return {
+    key: 'tribar', group, magic: new V3(0, 0, 1), Lam: toW(Lam), seamA: toW(Q.clone().sub(Lam)), seamB: toW(Q),
+    light: toW(new V3(0.3, 0.9, 0.55).normalize()),
+    reveal: { dAz: 52, dEl: 14 },
+    note: `Three straight beams joined at three right angles: a bent bar, not a triangle. Its two free ends are ${(L * Math.sqrt(3)).toFixed(1)} units apart, one directly behind the other along your line of sight, so here they meet in a fourth corner that isn't there.`,
+  };
+}
+
+/* ---------------------------------------------------------------- scene 3: crate */
+function buildCrate() {
+  const a = 2, b = 0.27;
+  const v = new V3(0.5, 0.42, 1).normalize();
+  const pieces = [];
+  let id = 1;
+  for (const y of [-a, a]) for (const z of [-a, a]) pieces.push({ faces: boxFaces(-a - b, y - b, z - b, a + b, y + b, z + b), id: id++ });
+  for (const x of [-a, a]) for (const y of [-a, a]) pieces.push({ faces: boxFaces(x - b, y - b, -a + b, x + b, y + b, a - b), id: id++ });
+  let postId = 0;
+  for (const x of [-a, a]) for (const z of [-a, a]) {
+    const f = boxFaces(x - b, -a + b, z - b, x + b, a - b, z + b);
+    if (x === -a && z === -a) { postId = id; pieces.push({ faces: f, id: id++, post: true }); }
+    else pieces.push({ faces: f, id: id++ });
+  }
+  // where the far-left post crosses the near top beam on screen
+  const k = -2 * a / v.z;
+  const yc = a + k * v.y;
+  const n = cutNormal(new V3(0, 1, 0), v);
+  const half = 0.62;
+  const qLo = new V3(-a, yc - half, -a), qHi = new V3(-a, yc + half, -a);
+  const tau = -k + 2.4 * b / v.z + 0.35;
+  const shift = v.clone().multiplyScalar(tau);
+  const out = [];
+  for (const p of pieces) {
+    if (!p.post) { out.push(p); continue; }
+    out.push({ faces: clipFaces(p.faces, n, qLo, -1), id: p.id });
+    out.push({ faces: clipFaces(p.faces, n, qHi, +1), id: p.id });
+    const mid = clipFaces(clipFaces(p.faces, n, qLo, +1), n, qHi, -1);
+    out.push({ faces: shiftFaces(mid, shift), id: p.id });
+  }
+  const group = new THREE.Group();
+  group.add(new THREE.Mesh(facesToGeometry(out), stoneMat));
+  return {
+    key: 'crate', group, magic: v, Lam: shift, seamA: new V3(-a, yc, -a), seamB: new V3(-a, yc, -a).add(shift),
+    light: new V3(-0.3, 0.85, 0.5).normalize(),
+    reveal: { dAz: -48, dEl: 6 },
+    note: `A cube frame of twelve beams. The far-left post has been sawn through twice and its middle slid <b>${tau.toFixed(1)} units toward you</b>, along your line of sight, so it now passes in front of a beam it really stands behind. It hangs in the air; from here you cannot tell.`,
+  };
+}
+
+/* ---------------------------------------------------------------- walkers */
+function makeWalker(i) {
+  const g = new THREE.Group();
+  const id = 200 + i;
+  const body = new THREE.Mesh(withId(new THREE.SphereGeometry(0.27, 24, 16), id), toyMat);
+  body.scale.set(1, 1.1, 0.96); body.position.y = 0.4;
+  g.add(body);
+  const belly = new THREE.Mesh(withId(new THREE.CylinderGeometry(0.285, 0.285, 0.06, 24), id + 20), keyMat);
+  belly.position.y = 0.33; g.add(belly);
+  const feet = [-1, 1].map((sx) => {
+    const f = new THREE.Mesh(withId(new THREE.SphereGeometry(0.09, 12, 8), id), toyMat);
+    f.scale.set(1, 0.7, 1.45); f.position.set(sx * 0.12, 0.07, 0.03); g.add(f); return f;
+  });
+  const eyes = [-1, 1].map((sx) => {
+    const e = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), inkMat);
+    e.scale.set(1, 1.25, 0.6);
+    e.position.set(sx * 0.095, 0.47, 0.262); e.layers.set(1); g.add(e); return e;
+  });
+  const keyG = new THREE.Group(); keyG.position.set(0, 0.42, -0.25); g.add(keyG);
+  const shaft = new THREE.Mesh(withId(new THREE.CylinderGeometry(0.024, 0.024, 0.2, 8), id + 40), keyMat);
+  shaft.rotation.x = Math.PI / 2; shaft.position.z = -0.09; keyG.add(shaft);
+  for (const sx of [-1, 1]) {
+    const bow = new THREE.Mesh(withId(new THREE.TorusGeometry(0.075, 0.024, 8, 18), id + 40), keyMat);
+    bow.rotation.x = Math.PI / 2; bow.position.set(sx * 0.09, 0, -0.2); keyG.add(bow);
+  }
+  g.userData = { body, feet, keyG, heading: 0 };
+  g.scale.setScalar(1.3);
+  return g;
+}
+
+/* ---------------------------------------------------------------- assemble */
+const scene = new THREE.Scene();
+const scenes = [buildStair(), buildTribar(), buildCrate()];
+for (const S of scenes) {
+  S.group.visible = false; scene.add(S.group);
+  S.basis = magicBasis(S.magic);
+  S.az0 = Math.atan2(S.magic.x, S.magic.z);
+  S.el0 = Math.asin(S.magic.y);
+  // magic-view image bounds
+  S.group.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(S.group);
+  S.target = box.getCenter(new V3());
+  let r0 = Infinity, r1 = -Infinity, u0 = Infinity, u1 = -Infinity;
+  S.group.traverse((o) => {
+    if (!o.isMesh) return;
+    const pa = o.geometry.attributes.position, p = new V3();
+    for (let i = 0; i < pa.count; i++) {
+      p.fromBufferAttribute(pa, i).applyMatrix4(o.matrixWorld).sub(S.target);
+      const r = p.dot(S.basis.r), u = p.dot(S.basis.u);
+      r0 = Math.min(r0, r); r1 = Math.max(r1, r); u0 = Math.min(u0, u); u1 = Math.max(u1, u);
+    }
+  });
+  S.bounds = { r0, r1, u0, u1 };
+  const seen = new Set(); S.pts = [];
+  S.group.traverse((o) => {
+    if (!o.isMesh || o.parent !== S.group && o.parent.parent !== S.group) return;
+    if (o.geometry.type !== 'BufferGeometry') return;
+    const pa = o.geometry.attributes.position, p = new V3();
+    for (let i = 0; i < pa.count; i++) {
+      p.fromBufferAttribute(pa, i).applyMatrix4(o.matrixWorld);
+      const key = `${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`;
+      if (!seen.has(key)) { seen.add(key); S.pts.push(p.clone().sub(S.target)); }
+    }
+  });
+}
+// walkers belong to the stair
+const stair = scenes[0];
+const NW = 5;
+const walkers = [];
+for (let i = 0; i < NW; i++) {
+  const w = makeWalker(i);
+  w.userData.p = (i * stair.N) / NW + 0.35;
+  stair.group.add(w); walkers.push(w);
+}
+stair.bounds.u1 += 1.1; stair.uPad = 1.1;
+
+const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
+cam.layers.enable(1);
+
+/* ---------------------------------------------------------------- state */
+const st = {
+  si: 0, mode: 'hold',
+  dAz: 0, dEl: 0, vAz: 0, vEl: 0,
+  dragging: false, roll: 0,
+  reveal: null,
+  walking: !reduceMotion, speed: 1,
+  ppu: 40, ox: 0, oy: 0, tgt: null,
+  armed: false, lastGap: 0, ringT: -1, ringAt: null, everDragged: false,
+  W: 1, H: 1,
+};
+const S = () => scenes[st.si];
+
+/* ---------------------------------------------------------------- layout */
+const rail = $('#rail'), hint = $('#hint');
+function computeLayout() {
+  const W = st.W, H = st.H;
+  const rr = rail.getBoundingClientRect();
+  const collapsed = rail.classList.contains('collapsed');
+  const phone = W <= 720;
+  let L = 24, R = W - 24, T = 24 + (phone ? 64 : 0), B = H - 24;
+  if (!phone && !collapsed) L = rr.right + 28;
+  if (phone && !collapsed) B = rr.top - 10;
+  if (!phone) T = 70;
+  const b = st.curBounds || S().bounds;
+  const ew = b.r1 - b.r0, eh = b.u1 - b.u0;
+  const ppu = Math.min((R - L) / ew, (B - T) / eh) * 0.9;
+  const cx = (L + R) / 2, cy = (T + B) / 2;
+  const bcr = (b.r0 + b.r1) / 2, bcu = (b.u0 + b.u1) / 2;
+  return { ppu, ox: (cx - W / 2) / ppu - bcr, oy: (H / 2 - cy) / ppu - bcu, hintX: cx, hintY: B - 8 };
+}
+function resize() {
+  st.W = window.innerWidth; st.H = window.innerHeight;
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  renderer.setPixelRatio(DPR);
+  renderer.setSize(st.W, st.H, false);
+  const ss = SS();
+  rtN.setSize(Math.round(st.W * DPR * ss), Math.round(st.H * DPR * ss));
+  edgeMat.uniforms.uPx.value.set(1 / (st.W * DPR * ss), 1 / (st.H * DPR * ss));
+  edgeMat.uniforms.uR.value = 0.95 * DPR * ss;
+  bgMat.uniforms.uRes.value.set(st.W * DPR, st.H * DPR);
+  bgMat.uniforms.uDpr.value = DPR;
+  marks.width = Math.round(st.W * DPR); marks.height = Math.round(st.H * DPR);
+  st.tgt = computeLayout();
+  if (!st.inited) { Object.assign(st, { ppu: st.tgt.ppu, ox: st.tgt.ox, oy: st.tgt.oy }); st.inited = true; }
+  placeHint();
+}
+function placeHint() {
+  const t = st.tgt; if (!t) return;
+  hint.style.left = `${t.hintX}px`; hint.style.top = `${t.hintY - 22}px`;
+  hint.style.transform = 'translateX(-50%)';
+}
+window.addEventListener('resize', resize);
+
+/* ---------------------------------------------------------------- scene switching */
+function setScene(i) {
+  st.si = i;
+  scenes.forEach((s, k) => (s.group.visible = k === i));
+  const s = S();
+  U.uLight.value.copy(s.light);
+  U.uH1.value.copy(s.basis.r).add(s.basis.u).normalize();
+  U.uH2.value.copy(s.basis.r).sub(s.basis.u).normalize();
+  document.querySelectorAll('[data-scene]').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.scene === i)));
+  $('#sceneNote').innerHTML = s.note;
+  $('#walkGroup').classList.toggle('hidden', s.key !== 'stair');
+  st.dAz = st.dEl = st.vAz = st.vEl = 0; st.reveal = null; $('#reveal').disabled = false;
+  st.tgt = computeLayout();
+  Object.assign(st, { ppu: st.tgt.ppu, ox: st.tgt.ox, oy: st.tgt.oy });
+}
+
+/* ---------------------------------------------------------------- camera */
+function applyCamera() {
+  const s = S();
+  const az = s.az0 + st.dAz * DEG, el = Math.max(-1.45, Math.min(1.45, s.el0 + st.dEl * DEG));
+  const dir = sph(az, el);
+  cam.position.copy(s.target).addScaledVector(dir, 120);
+  cam.up.set(0, 1, 0);
+  cam.lookAt(s.target);
+  cam.rotateZ(st.roll);
+  const hw = st.W / 2 / st.ppu, hh = st.H / 2 / st.ppu;
+  cam.left = -hw - st.ox; cam.right = hw - st.ox; cam.top = hh - st.oy; cam.bottom = -hh - st.oy;
+  cam.near = 1; cam.far = 260;
+  cam.updateProjectionMatrix();
+  cam.updateMatrixWorld();
+  U.uSp.value = 4.4 / st.ppu;
+  const err = Math.acos(Math.min(1, dir.dot(s.magic)));
+  // image bounds from the current eye, so the object stays framed while you orbit
+  const r = new V3(0, 1, 0).cross(dir).normalize(), u = dir.clone().cross(r);
+  let r0 = Infinity, r1 = -Infinity, u0 = Infinity, u1 = -Infinity;
+  for (const p of s.pts) {
+    const a = p.dot(r), b = p.dot(u);
+    if (a < r0) r0 = a; if (a > r1) r1 = a; if (b < u0) u0 = b; if (b > u1) u1 = b;
+  }
+  st.curBounds = { r0, r1, u0, u1: u1 + (s.uPad || 0) };
+  return { err, gapPx: s.Lam.length() * Math.sin(err) * st.ppu };
+}
+function toScreen(p) {
+  const q = p.clone().project(cam);
+  return [(q.x * 0.5 + 0.5) * st.W, (-q.y * 0.5 + 0.5) * st.H];
+}
+
+/* ---------------------------------------------------------------- walkers update */
+function updateWalkers(dt, t) {
+  const N = stair.N;
+  for (const w of walkers) {
+    const u = w.userData;
+    if (st.walking) u.p += dt * 0.95 * st.speed;
+    if (u.p >= N) u.p -= N;           // the seam: carried one lap down, invisibly
+    const i = Math.floor(u.p), f = u.p - i;
+    const a = stair.path(i), b = stair.path(i + 1);
+    const e = f;
+    const pos = a.clone().lerp(b, e);
+    const rise = THREE.MathUtils.smoothstep(f, 0.18, 0.62);
+    pos.y = a.y + (b.y - a.y) * rise + Math.sin(Math.PI * f) * 0.13;
+    w.position.copy(pos);
+    const hd = Math.atan2(b.x - a.x, b.z - a.z);
+    let dh = hd - u.heading; dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+    u.heading += dh * Math.min(1, dt * 9);
+    w.rotation.y = u.heading;
+    const ph = f * Math.PI * 2;
+    u.feet[0].position.y = 0.07 + Math.max(0, Math.sin(ph)) * 0.07;
+    u.feet[1].position.y = 0.07 + Math.max(0, -Math.sin(ph)) * 0.07;
+    u.feet[0].position.z = 0.03 + Math.sin(ph) * 0.06;
+    u.feet[1].position.z = 0.03 - Math.sin(ph) * 0.06;
+    u.body.rotation.z = Math.sin(ph) * 0.07;
+    u.body.scale.y = 1.1 - Math.cos(ph * 2) * 0.025;
+    if (st.walking) u.keyG.rotation.z -= dt * 2.4 * st.speed;
+  }
+}
+
+/* ---------------------------------------------------------------- input */
+let last = null;
+canvas.addEventListener('pointerdown', (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  st.dragging = true; st.reveal = null; $('#reveal').disabled = false;
+  st.vAz = st.vEl = 0;
+  last = { x: e.clientX, y: e.clientY, t: performance.now() };
+  canvas.classList.add('dragging');
+  if (!st.everDragged) { st.everDragged = true; hint.classList.add('gone'); }
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!st.dragging || !last) return;
+  const now = performance.now();
+  const dx = e.clientX - last.x, dy = e.clientY - last.y, dt = Math.max(8, now - last.t) / 1000;
+  st.dAz -= dx * 0.32; st.dEl += dy * 0.28;
+  st.dEl = Math.max(-80, Math.min(80, st.dEl));
+  st.vAz = (-dx * 0.32) / dt; st.vEl = (dy * 0.28) / dt;
+  last = { x: e.clientX, y: e.clientY, t: now };
+});
+const endDrag = () => {
+  if (!st.dragging) return;
+  st.dragging = false; last = null; canvas.classList.remove('dragging');
+  st.armed = true;
+  if (st.mode === 'hold') { st.vAz = 0; st.vEl = 0; }
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('keydown', (e) => {
+  const k = { ArrowLeft: [4, 0], ArrowRight: [-4, 0], ArrowUp: [0, -4], ArrowDown: [0, 4] }[e.key];
+  if (!k) return;
+  e.preventDefault();
+  st.dAz += k[0]; st.dEl += k[1]; st.armed = true; st.reveal = null;
+  if (!st.everDragged) { st.everDragged = true; hint.classList.add('gone'); }
+});
+
+function setMode(m) {
+  st.mode = m;
+  $('#modeHold').setAttribute('aria-pressed', String(m === 'hold'));
+  $('#modeFree').setAttribute('aria-pressed', String(m === 'free'));
+  if (m === 'hold') st.armed = true;
+}
+$('#modeHold').addEventListener('click', () => setMode('hold'));
+$('#modeFree').addEventListener('click', () => setMode('free'));
+document.querySelectorAll('[data-scene]').forEach((b) => b.addEventListener('click', () => setScene(+b.dataset.scene)));
+
+const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+function startReveal() {
+  const s = S();
+  st.reveal = { t: 0, from: { az: st.dAz, el: st.dEl }, to: s.reveal, go: reduceMotion ? 0.5 : 1.7, hold: 2.8, back: reduceMotion ? 0.5 : 1.5 };
+  $('#reveal').disabled = true;
+}
+$('#reveal').addEventListener('click', startReveal);
+
+$('#walkToggle').addEventListener('click', () => {
+  st.walking = !st.walking;
+  $('#walkToggle').setAttribute('aria-pressed', String(st.walking));
+  $('#walkToggle').textContent = st.walking ? 'walking' : 'paused';
+});
+$('#walkSpeed').addEventListener('input', (e) => (st.speed = +e.target.value));
+if (!st.walking) { $('#walkToggle').setAttribute('aria-pressed', 'false'); $('#walkToggle').textContent = 'paused'; }
+
+$('#railToggle').addEventListener('click', () => {
+  const c = rail.classList.toggle('collapsed');
+  $('#railToggle').textContent = c ? 'show' : 'hide';
+  $('#railToggle').setAttribute('aria-expanded', String(!c));
+  st.tgt = computeLayout(); placeHint();
+});
+
+/* ---------------------------------------------------------------- marks overlay (seam, snap ring) */
+const hud = $('#hud'), hudText = $('#hudText'), hudGap = $('#hudGap');
+let hudState = '';
+function drawMarks(view, t) {
+  const ctx = mctx; const d = DPR;
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+  ctx.clearRect(0, 0, st.W, st.H);
+  const s = S();
+  const A = toScreen(s.seamA), B = toScreen(s.seamB);
+  const k = THREE.MathUtils.smoothstep(view.gapPx, 4, 22);
+  if (k > 0.01) {
+    ctx.globalAlpha = k;
+    ctx.strokeStyle = PAL.brick; ctx.fillStyle = PAL.brick; ctx.lineWidth = 1.4;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke();
+    ctx.setLineDash([]);
+    for (const P of [A, B]) { ctx.beginPath(); ctx.arc(P[0], P[1], 4.2, 0, Math.PI * 2); ctx.stroke(); ctx.beginPath(); ctx.arc(P[0], P[1], 1.6, 0, Math.PI * 2); ctx.fill(); }
+    const mx = (A[0] + B[0]) / 2, my = (A[1] + B[1]) / 2;
+    const len = s.Lam.length();
+    ctx.font = `500 11px "IBM Plex Mono", ui-monospace, monospace`;
+    const label = `the same point · ${len.toFixed(1)} apart`;
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = 'rgba(230,226,213,0.9)';
+    ctx.fillRect(mx + 10, my - 9, tw + 10, 18);
+    ctx.fillStyle = PAL.brick;
+    ctx.fillText(label, mx + 15, my + 4);
+    ctx.globalAlpha = 1;
+  }
+  if (st.ringT >= 0) {
+    const age = t - st.ringT;
+    if (age > 1.1) st.ringT = -1;
+    else {
+      const e = 1 - Math.pow(1 - age / 1.1, 3);
+      ctx.globalAlpha = 1 - e;
+      ctx.strokeStyle = PAL.brick; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(B[0], B[1], 6 + e * 46, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(B[0], B[1], 3 + e * 22, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+function updateHud(view, t) {
+  const g = view.gapPx;
+  const state = g < 1 ? 'hold' : g < 6 ? 'strain' : 'broken';
+  if (state !== hudState) {
+    hud.dataset.state = state;
+    hudText.textContent = state === 'hold' ? 'Illusion holds' : state === 'strain' ? 'Illusion strains' : 'Illusion broken';
+    if (state === 'hold' && hudState && st.armed) {
+      hud.classList.remove('pulse'); void hud.offsetWidth; hud.classList.add('pulse');
+      st.ringT = t; st.armed = false;
+    }
+    hudState = state;
+  }
+  hudGap.textContent = `seam ${g < 10 ? g.toFixed(1) : Math.round(g)} px apart`;
+  $('#rdAngle').textContent = `${(view.err / DEG).toFixed(2)}°`;
+  $('#rdGap').textContent = `${g < 10 ? g.toFixed(1) : Math.round(g)} px`;
+}
+
+/* ---------------------------------------------------------------- loop */
+let prev = performance.now(), T = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - prev) / 1000); prev = now; T += dt;
+
+  // camera dynamics
+  if (st.reveal) {
+    const r = st.reveal; r.t += dt;
+    if (r.t < r.go) { const e = ease(r.t / r.go); st.dAz = r.from.az + (r.to.dAz - r.from.az) * e; st.dEl = r.from.el + (r.to.dEl - r.from.el) * e; }
+    else if (r.t < r.go + r.hold) { st.dAz = r.to.dAz; st.dEl = r.to.dEl; }
+    else if (r.t < r.go + r.hold + r.back) {
+      const e = ease((r.t - r.go - r.hold) / r.back);
+      st.dAz = r.to.dAz * (1 - e); st.dEl = r.to.dEl * (1 - e); st.armed = true;
+    } else { st.dAz = st.dEl = 0; st.reveal = null; $('#reveal').disabled = false; }
+  } else if (!st.dragging) {
+    if (st.mode === 'hold') {
+      const k = reduceMotion ? 220 : 64, c = reduceMotion ? 30 : 11.5;
+      st.vAz += (-k * st.dAz - c * st.vAz) * dt; st.vEl += (-k * st.dEl - c * st.vEl) * dt;
+      st.dAz += st.vAz * dt; st.dEl += st.vEl * dt;
+      if (Math.abs(st.dAz) < 0.002 && Math.abs(st.vAz) < 0.01) { st.dAz = 0; st.vAz = 0; }
+      if (Math.abs(st.dEl) < 0.002 && Math.abs(st.vEl) < 0.01) { st.dEl = 0; st.vEl = 0; }
+    } else {
+      st.dAz += st.vAz * dt; st.dEl += st.vEl * dt;
+      const damp = Math.exp(-dt * 3.2); st.vAz *= damp; st.vEl *= damp;
+      st.dEl = Math.max(-80, Math.min(80, st.dEl));
+    }
+  }
+  // ambient life: roll about the line of sight leaves the illusion exactly intact
+  st.roll = reduceMotion ? 0 : Math.sin(T * 0.23) * 1.3 * DEG + Math.sin(T * 0.11 + 1) * 0.6 * DEG;
+
+  // layout easing
+  if (st.curBounds) st.tgt = computeLayout();
+  if (st.tgt) {
+    const a = 1 - Math.exp(-dt * 7);
+    st.ppu += (st.tgt.ppu - st.ppu) * a; st.ox += (st.tgt.ox - st.ox) * a; st.oy += (st.tgt.oy - st.oy) * a;
+  }
+
+  if (S().key === 'stair') updateWalkers(dt, T);
+  const view = applyCamera();
+  scene.updateMatrixWorld();
+
+  // pass 1: line buffer (normals + ids), layer 0 only
+  cam.layers.set(0);
+  scene.overrideMaterial = idMat;
+  renderer.setRenderTarget(rtN);
+  renderer.setClearColor(0x000000, 0); renderer.clear();
+  renderer.render(scene, cam);
+  // pass 2: paper, tone, ink
+  scene.overrideMaterial = null;
+  cam.layers.enable(1);
+  renderer.setRenderTarget(null);
+  renderer.setClearColor(C(PAL.paper), 1); renderer.clear();
+  const [scx, scy] = toScreen(S().target);
+  bgMat.uniforms.uC.value.set(scx, st.H - scy);
+  renderer.render(bgScene, screenCam);
+  renderer.clearDepth();
+  renderer.render(scene, cam);
+  renderer.render(edgeScene, screenCam);
+
+  drawMarks(view, T);
+  updateHud(view, T);
+  requestAnimationFrame(frame);
+}
+
+resize();
+setScene(0);
+requestAnimationFrame((t) => { prev = t; frame(t); });
+
+// test hooks for the screenshot harness
+window.__imp = {
+  setView(dAz, dEl) { setMode('free'); st.reveal = null; st.dAz = dAz; st.dEl = dEl; st.vAz = st.vEl = 0; },
+  scene: setScene, mode: setMode, reveal: startReveal, st,
+};
+})();
+</script>
+</body>
+</html>

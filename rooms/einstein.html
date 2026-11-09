@@ -1,0 +1,940 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>The Einstein</title>
+<link rel="stylesheet" href="../studio.css">
+<style>
+  :root {
+    --print: #d2b96f;     /* pale ochre */
+    --green: #2c5a45;     /* deep green */
+  }
+  .plate { cursor: grab; }
+  .plate.dragging { cursor: grabbing; }
+  .plate:focus-visible { outline: 2px solid var(--print); outline-offset: -4px; }
+  .editor-wrap { position: relative; }
+  #curve { display: block; width: 100%; height: 132px; background: var(--ink-2); border: 1px solid var(--ink-3); touch-action: none; cursor: crosshair; }
+  #curve:focus-visible { outline: 2px solid var(--print); outline-offset: 2px; }
+  .hint { font: 400 11px/1.4 var(--mono); color: var(--paper-dim); margin: 0; }
+  .swatches { display: flex; gap: 4px; }
+  .swatches i { width: 14px; height: 14px; display: inline-block; border: 1px solid var(--ink-3); }
+  .proof { font: 400 11px/1.55 var(--mono); color: var(--paper-dim); margin: 0; }
+  .proof b { color: var(--print); font-weight: 500; }
+  .proof .bad { color: #d9776a; }
+  @media (max-width: 720px) {
+    #curve { height: 112px; }
+  }
+</style>
+</head>
+<body>
+<div class="room">
+  <canvas class="plate" id="plate" tabindex="0" aria-label="An endless spectre tiling. Drag to pan, scroll or pinch to zoom, arrow keys to move, plus and minus to zoom."></canvas>
+  <aside class="rail" id="rail">
+    <div class="rail-head"><a class="back" href="../index.html">← Studio</a>
+      <button class="toggle" id="railToggle" aria-expanded="true">hide</button></div>
+    <h1 class="room-title">The <em>Einstein</em></h1>
+    <p class="lede">Escher spent decades on shapes that fill the plane, and every one of them repeated. In 2023 <b>David Smith</b>, a retired print technician from Yorkshire, found a single tile that covers the plane only without ever repeating; weeks later he and his collaborators found the <b>spectre</b>, which needs no mirror images. <i>Ein Stein</i>: one stone. Bend its edge and every stone in the plate changes at once.</p>
+
+    <div class="group">
+      <span class="label" id="edgeLabel">The one edge</span>
+      <div class="editor-wrap"><canvas id="curve" tabindex="0" aria-labelledby="edgeLabel" aria-describedby="curveHint"></canvas></div>
+      <p class="hint" id="curveHint">Drag the two solid knots. Their hollow twins follow, turned half a circle about the centre, so the edge reads the same from either side.</p>
+      <div class="row" id="presets">
+        <button class="btn on" data-preset="creature" aria-pressed="true">Creature</button>
+        <button class="btn" data-preset="wave" aria-pressed="false">Wave</button>
+        <button class="btn" data-preset="hook" aria-pressed="false">Hook</button>
+        <button class="btn" data-preset="straight" aria-pressed="false">Straight</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <span class="label">Print by</span>
+      <div class="row" id="modes">
+        <button class="btn on" data-mode="clusters" aria-pressed="true">Clusters</button>
+        <button class="btn" data-mode="turns" aria-pressed="false">Turns</button>
+        <button class="btn" data-mode="proof" aria-pressed="false">Proof</button>
+      </div>
+      <div class="row">
+        <button class="btn" id="mystic" aria-pressed="false">Show the Mystics</button>
+        <button class="btn on" id="lines" aria-pressed="true">Supertile lines</button>
+      </div>
+      <p class="hint" id="modeHint">Colour follows the first-order clusters; heavy lines mark their borders.</p>
+    </div>
+
+    <div class="group">
+      <span class="label">Plate</span>
+      <div class="row">
+        <button class="btn on" id="drift" aria-pressed="true">Drift</button>
+        <button class="btn" id="regrow">Regrow</button>
+        <button class="btn" id="zin" aria-label="Zoom in">+</button>
+        <button class="btn" id="zout" aria-label="Zoom out">−</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <span class="label">Why it never repeats</span>
+      <p class="note">Every tiling by this shape is forced to gather into clusters, which gather into larger clusters of the same nine kinds, without end. A repeating pattern is one block of fixed size, copied; here every block sits inside a bigger one, so no block can be the one that repeats. And because each edge carries the same S, a flipped copy cannot meet its neighbours: every stone here is the same stone, only turned.</p>
+    </div>
+
+    <div class="group">
+      <span class="label">Self-check</span>
+      <p class="proof" id="proof">checking…</p>
+    </div>
+  </aside>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+// ---------- palette ----------
+const INK = '#121315', PAPER = '#e8e4d8';
+const TONES = {
+  paper: '#e6e0cf',
+  ochreL: '#e3cf98',
+  ochre: '#cfb06a',
+  green: '#3f6e55',
+  greenD: '#244a39',
+};
+
+// ---------- spectre geometry (Tile(1,1)) ----------
+const S3 = Math.sqrt(3);
+const pt = (x, y) => ({ x, y });
+const SPECTRE = [
+  pt(0, 0), pt(1, 0), pt(1.5, -S3 / 2), pt(1.5 + S3 / 2, 0.5 - S3 / 2), pt(1.5 + S3 / 2, 1.5 - S3 / 2),
+  pt(2.5 + S3 / 2, 1.5 - S3 / 2), pt(3 + S3 / 2, 1.5), pt(3, 2), pt(3 - S3 / 2, 1.5),
+  pt(2.5 - S3 / 2, 1.5 + S3 / 2), pt(1.5 - S3 / 2, 1.5 + S3 / 2), pt(0.5 - S3 / 2, 1.5 + S3 / 2),
+  pt(-S3 / 2, 1.5), pt(0, 1),
+];
+const NV = SPECTRE.length;
+// Kaplan-style affine [a,b,c,d,e,f]: x' = a x + b y + c, y' = d x + e y + f
+const I = [1, 0, 0, 0, 1, 0];
+const mul = (A, B) => [
+  A[0] * B[0] + A[1] * B[3], A[0] * B[1] + A[1] * B[4], A[0] * B[2] + A[1] * B[5] + A[2],
+  A[3] * B[0] + A[4] * B[3], A[3] * B[1] + A[4] * B[4], A[3] * B[2] + A[4] * B[5] + A[5]];
+const trot = (a) => [Math.cos(a), -Math.sin(a), 0, Math.sin(a), Math.cos(a), 0];
+const ttrans = (x, y) => [1, 0, x, 0, 1, y];
+const transTo = (p, q) => ttrans(q.x - p.x, q.y - p.y);
+const tp = (M, P) => pt(M[0] * P.x + M[1] * P.y + M[2], M[3] * P.x + M[4] * P.y + M[5]);
+
+const BASE_QUAD = [SPECTRE[3], SPECTRE[5], SPECTRE[7], SPECTRE[11]];
+function buildBase() {
+  const r = {};
+  for (const l of ['Delta', 'Theta', 'Lambda', 'Xi', 'Pi', 'Sigma', 'Phi', 'Psi']) r[l] = { label: l, quad: BASE_QUAD, kids: null };
+  r.Gamma = { label: 'Gamma', quad: BASE_QUAD, kids: [
+    [{ label: 'Gamma1', kids: null }, I],
+    [{ label: 'Gamma2', kids: null }, mul(ttrans(SPECTRE[8].x, SPECTRE[8].y), trot(Math.PI / 6))]] };
+  return r;
+}
+const RULES = {
+  Gamma: ['Pi', 'Delta', null, 'Theta', 'Sigma', 'Xi', 'Phi', 'Gamma'],
+  Delta: ['Xi', 'Delta', 'Xi', 'Phi', 'Sigma', 'Pi', 'Phi', 'Gamma'],
+  Theta: ['Psi', 'Delta', 'Pi', 'Phi', 'Sigma', 'Pi', 'Phi', 'Gamma'],
+  Lambda: ['Psi', 'Delta', 'Xi', 'Phi', 'Sigma', 'Pi', 'Phi', 'Gamma'],
+  Xi: ['Psi', 'Delta', 'Pi', 'Phi', 'Sigma', 'Psi', 'Phi', 'Gamma'],
+  Pi: ['Psi', 'Delta', 'Xi', 'Phi', 'Sigma', 'Psi', 'Phi', 'Gamma'],
+  Sigma: ['Xi', 'Delta', 'Xi', 'Phi', 'Sigma', 'Pi', 'Lambda', 'Gamma'],
+  Phi: ['Psi', 'Delta', 'Psi', 'Phi', 'Sigma', 'Pi', 'Phi', 'Gamma'],
+  Psi: ['Psi', 'Delta', 'Psi', 'Phi', 'Sigma', 'Psi', 'Phi', 'Gamma'],
+};
+function buildSupertiles(sys) {
+  const quad = sys.Delta.quad;
+  const R = [-1, 0, 0, 0, 1, 0];
+  const steps = [[60, 3, 1], [0, 2, 0], [60, 3, 1], [60, 3, 1], [0, 2, 0], [60, 3, 1], [-120, 3, 3]];
+  const Ts = [I];
+  let ang = 0, rot = I;
+  const tq = [...quad];
+  for (const [a, from, to] of steps) {
+    ang += a;
+    if (a) { rot = trot(ang * Math.PI / 180); for (let i = 0; i < 4; i++) tq[i] = tp(rot, quad[i]); }
+    Ts.push(mul(transTo(tq[to], tp(Ts[Ts.length - 1], quad[from])), rot));
+  }
+  for (let i = 0; i < Ts.length; i++) Ts[i] = mul(R, Ts[i]);
+  const sq = [tp(Ts[6], quad[2]), tp(Ts[5], quad[1]), tp(Ts[3], quad[2]), tp(Ts[0], quad[1])];
+  const out = {};
+  for (const [l, subs] of Object.entries(RULES)) {
+    const kids = [];
+    subs.forEach((s, i) => { if (s) kids.push([sys[s], Ts[i]]); });
+    out[l] = { label: l, quad: sq, kids };
+  }
+  return out;
+}
+
+// ---------- build the patch ----------
+const LEVELS = 5;
+// level 5 has an odd number of supertile reflections; one more flip makes every tile unreflected
+const TOP = [-1, 0, 0, 0, 1, 0];
+// centre and radius of the largest disc the level-5 Delta patch fully covers (found offline; re-verified below)
+const C0 = pt(-114.1, -222.7), DISC_R = 122;
+
+const centroidLocal = (() => {
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0; i < NV; i++) {
+    const p = SPECTRE[i], q = SPECTRE[(i + 1) % NV], c = p.x * q.y - q.x * p.y;
+    a += c; cx += (p.x + q.x) * c; cy += (p.y + q.y) * c;
+  }
+  return pt(cx / (3 * a), cy / (3 * a));
+})();
+const TILE_R = Math.max(...SPECTRE.map(p => Math.hypot(p.x - centroidLocal.x, p.y - centroidLocal.y))) + 0.4;
+
+const tiles = [];
+const supers = { 1: [], 2: [] };
+(function build() {
+  let sys = buildBase();
+  for (let i = 0; i < LEVELS; i++) sys = buildSupertiles(sys);
+  let dfs = 0;
+  const anc = [0, 0, 0];
+  const lab = ['', '', ''];
+  function walk(node, M, L) {
+    if (L === 1 || L === 2) { anc[L] = supers[L].length; lab[L] = node.label; supers[L].push({ label: node.label, sx: 0, sy: 0, n: 0 }); }
+    if (L === 0) lab[0] = node.label;
+    if (!node.kids) {
+      const c = tp(M, centroidLocal);
+      if (Math.hypot(c.x - C0.x, c.y - C0.y) > DISC_R + 6) return;
+      const ang = ((Math.round(Math.atan2(M[3], M[0]) * 180 / Math.PI) % 360) + 360) % 360;
+      tiles.push({
+        m: [M[0], M[3], M[1], M[4], M[2], M[5]], // canvas order
+        cx: c.x, cy: c.y, ang,
+        mystic: node.label === 'Gamma1' || node.label === 'Gamma2',
+        odd: node.label === 'Gamma2',
+        l0: lab[0], l1: lab[1], a1: anc[1], a2: anc[2], dfs: dfs++,
+      });
+      for (const k of [1, 2]) { const s = supers[k][anc[k]]; s.sx += c.x; s.sy += c.y; s.n++; }
+      return;
+    }
+    // the Mystic (a level-0 unit) holds its two spectres at level -1
+    for (const [child, T] of node.kids) walk(child, mul(M, T), L - 1);
+  }
+  walk(sys.Delta, TOP, LEVELS);
+})();
+
+// spatial grid of tile centres
+const CELL = 6;
+const grid = new Map();
+tiles.forEach((t, i) => {
+  const k = Math.floor(t.cx / CELL) + ',' + Math.floor(t.cy / CELL);
+  let a = grid.get(k); if (!a) grid.set(k, a = []); a.push(i);
+});
+function tilesInRect(x0, y0, x1, y1, out) {
+  x0 -= TILE_R; y0 -= TILE_R; x1 += TILE_R; y1 += TILE_R;
+  for (let gx = Math.floor(x0 / CELL); gx <= Math.floor(x1 / CELL); gx++)
+    for (let gy = Math.floor(y0 / CELL); gy <= Math.floor(y1 / CELL); gy++) {
+      const a = grid.get(gx + ',' + gy); if (!a) continue;
+      for (const i of a) { const t = tiles[i]; if (t.cx >= x0 && t.cx <= x1 && t.cy >= y0 && t.cy <= y1) out.push(i); }
+    }
+  return out;
+}
+
+// edge adjacency: partner tile per edge; heavy line where first-order clusters differ
+const wv = (t, p) => pt(t.m[0] * p.x + t.m[2] * p.y + t.m[4], t.m[1] * p.x + t.m[3] * p.y + t.m[5]);
+const vkey = (p) => Math.round(p.x * 1000) + ',' + Math.round(p.y * 1000);
+const edgeMap = new Map();
+let sameDirDupes = 0;
+tiles.forEach((t, ti) => {
+  t.w = SPECTRE.map(p => wv(t, p));
+  t.vk = t.w.map(vkey);
+  t.partner = new Int32Array(NV).fill(-1);
+  for (let i = 0; i < NV; i++) {
+    const k = t.vk[i] + '|' + t.vk[(i + 1) % NV];
+    if (edgeMap.has(k)) sameDirDupes++; else edgeMap.set(k, ti * NV + i);
+  }
+});
+tiles.forEach((t, ti) => {
+  for (let i = 0; i < NV; i++) {
+    const rk = t.vk[(i + 1) % NV] + '|' + t.vk[i];
+    const e = edgeMap.get(rk);
+    if (e !== undefined) t.partner[i] = e;
+  }
+});
+
+// ---------- the editable edge ----------
+// Knots live in edge-local coords (u along the edge, v to its left). The full knot list is
+// point-symmetric about (0.5, 0), so the curve reads identically from the neighbouring tile.
+const PRESETS = {
+  creature: [[0.15, 0.15], [0.34, 0.12]],
+  wave: [[0.2, 0.24], [0.4, 0.17]],
+  hook: [[0.12, -0.04], [0.3, 0.25]],
+  straight: [[1 / 6, 0], [1 / 3, 0]],
+};
+let knots = PRESETS.creature.map(k => k.slice());
+const VMAX = 0.27;
+
+function knotList() {
+  const [k1, k2] = knots;
+  return [[0, 0], k1, k2, [0.5, 0], [1 - k2[0], -k2[1]], [1 - k1[0], -k1[1]], [1, 0]];
+}
+// Catmull-Rom through the knots -> cubic Bezier segments [c1, c2, p] in edge-local coords
+function curveSegments() {
+  const P = knotList();
+  const n = P.length;
+  const at = (i) => i < 0 ? [2 * P[0][0] - P[1][0], 2 * P[0][1] - P[1][1]] : i >= n ? [2 * P[n - 1][0] - P[n - 2][0], 2 * P[n - 1][1] - P[n - 2][1]] : P[i];
+  const segs = [];
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+    segs.push([
+      [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6],
+      [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6],
+      p2,
+    ]);
+  }
+  return segs;
+}
+function bez(p0, c1, c2, p3, t) {
+  const s = 1 - t;
+  return [s * s * s * p0[0] + 3 * s * s * t * c1[0] + 3 * s * t * t * c2[0] + t * t * t * p3[0],
+          s * s * s * p0[1] + 3 * s * s * t * c1[1] + 3 * s * t * t * c2[1] + t * t * t * p3[1]];
+}
+function curveAt(segs, t) { // t in [0,1] over the whole edge
+  const n = segs.length, x = Math.min(t * n, n - 1e-9), k = Math.floor(x);
+  const start = k === 0 ? [0, 0] : segs[k - 1][2];
+  return bez(start, segs[k][0], segs[k][1], segs[k][2], x - k);
+}
+
+let tilePath, edgePaths, SEGS;
+function buildTilePaths() {
+  SEGS = curveSegments();
+  tilePath = new Path2D();
+  edgePaths = [];
+  tilePath.moveTo(SPECTRE[0].x, SPECTRE[0].y);
+  for (let i = 0; i < NV; i++) {
+    const a = SPECTRE[i], b = SPECTRE[(i + 1) % NV];
+    const dx = b.x - a.x, dy = b.y - a.y; // unit length
+    const L = (u, v) => [a.x + u * dx - v * dy, a.y + u * dy + v * dx];
+    const ep = new Path2D();
+    ep.moveTo(a.x, a.y);
+    for (const [c1, c2, p] of SEGS) {
+      const A = L(c1[0], c1[1]), B = L(c2[0], c2[1]), C = L(p[0], p[1]);
+      tilePath.bezierCurveTo(A[0], A[1], B[0], B[1], C[0], C[1]);
+      ep.bezierCurveTo(A[0], A[1], B[0], B[1], C[0], C[1]);
+    }
+    edgePaths.push(ep);
+  }
+  tilePath.closePath();
+}
+
+// ---------- the creature (tile-local coordinates) ----------
+// The spectre reads as a fish-newt: head at vertex 12, dorsal fin at vertex 2, tail at vertex 6.
+let FEAT;
+function buildFeatures() {
+  const eye = new Path2D(), pupil = new Path2D(), glint = new Path2D(), marks = new Path2D(), fine = new Path2D(), patch = new Path2D(), spots = new Path2D();
+  // countershaded belly, clipped to the tile so it survives any edge curve
+  patch.moveTo(-1.2, 1.78);
+  patch.bezierCurveTo(-0.2, 2.02, 0.9, 2.08, 1.55, 1.92);
+  patch.bezierCurveTo(2.2, 1.76, 2.7, 1.62, 3.3, 1.78);
+  patch.lineTo(3.3, 3); patch.lineTo(-1.2, 3); patch.closePath();
+  // eye
+  const ex = 0.02, ey = 1.42, er = 0.27;
+  eye.arc(ex, ey, er, 0, Math.PI * 2);
+  pupil.arc(ex - 0.06, ey + 0.02, 0.135, 0, Math.PI * 2);
+  glint.arc(ex - 0.1, ey - 0.03, 0.04, 0, Math.PI * 2);
+  // mouth and gill
+  marks.moveTo(-0.72, 1.74); marks.quadraticCurveTo(-0.45, 1.9, -0.16, 1.82);
+  marks.moveTo(0.48, 1.08); marks.bezierCurveTo(0.66, 1.35, 0.66, 1.8, 0.46, 2.06);
+  // dorsal fin rays, fanned from the back
+  for (const [x, y] of [[1.22, -0.18], [1.45, -0.45], [1.72, -0.38], [1.98, -0.2]]) {
+    marks.moveTo(1.55 + (x - 1.55) * 0.2, 0.36); marks.lineTo(x, y);
+  }
+  // tail rays
+  for (const [x, y] of [[3.25, 0.9], [3.5, 1.2], [3.55, 1.48], [3.3, 1.75]]) {
+    marks.moveTo(2.75, 1.32); marks.lineTo(x, y);
+  }
+  // scale rows: overlapping ")" gouges along the flank, convex side to the tail
+  const rows = [[0.68, 1.02, 2.2], [0.96, 0.92, 2.42], [1.24, 1.0, 2.36], [1.52, 1.12, 2.0]];
+  rows.forEach(([y, x0, x1], r) => {
+    for (let x = x0 + (r % 2) * 0.1; x <= x1; x += 0.2) {
+      fine.moveTo(x + 0.11 * Math.cos(-1.1), y + 0.11 * Math.sin(-1.1));
+      fine.arc(x, y, 0.11, -1.1, 1.1);
+    }
+  });
+  // a few dark spots on the back
+  for (const [x, y, r] of [[1.05, 0.42, 0.055], [2.15, 0.62, 0.05], [2.55, 1.08, 0.06], [0.82, 1.78, 0.045]]) {
+    spots.moveTo(x + r, y); spots.arc(x, y, r, 0, Math.PI * 2);
+  }
+  FEAT = { eye, pupil, glint, marks, fine, patch, spots };
+}
+
+// ---------- colouring ----------
+const state = { mode: 'clusters', mystic: false, lines: true, drift: !matchMedia('(prefers-reduced-motion: reduce)').matches };
+const CLUSTER_TONE = { Phi: 'green', Psi: 'ochreL', Delta: 'paper', Sigma: 'ochre', Gamma: 'greenD', Pi: 'paper', Xi: 'ochreL', Theta: 'ochre', Lambda: 'ochre' };
+const TURN_TONE = ['paper', 'ochreL', 'green', 'ochre', 'greenD', 'ochreL'];
+function hexMix(a, b, t) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = (p, s) => (p >> s) & 255;
+  const m = (s) => Math.round(ch(pa, s) * (1 - t) + ch(pb, s) * t);
+  return '#' + ((1 << 24) | (m(16) << 16) | (m(8) << 8) | m(0)).toString(16).slice(1);
+}
+function toneOf(t) {
+  if (state.mode === 'proof') return 'paper';
+  if (state.mode === 'turns') return t.odd ? 'mystic' : TURN_TONE[Math.round(t.ang / 60) % 6];
+  return CLUSTER_TONE[t.l1] || 'paper';
+}
+function assignColours() {
+  for (const t of tiles) {
+    let tone = toneOf(t);
+    let fill = tone === 'mystic' ? '#d9a441' : TONES[tone];
+    let dark = tone === 'green' || tone === 'greenD';
+    if (state.mystic) {
+      if (t.mystic) { fill = t.odd ? '#e0ab45' : '#e9dcb4'; dark = false; }
+      else { fill = hexMix(fill, '#18201c', 0.8); dark = true; }
+    }
+    t.fill = fill;
+    t.patch = dark ? hexMix(fill, PAPER, 0.16) : hexMix(fill, '#ffffff', 0.35);
+    t.mark = dark ? hexMix(fill, INK, 0.55) : hexMix(fill, INK, 0.7);
+    t.dim = state.mystic && !t.mystic;
+  }
+}
+
+// ---------- drawing one tile ----------
+// base: canvas matrix world->pixels; px: pixels per world unit
+function drawTile(ctx, t, base, px, grow) {
+  let m = t.m;
+  if (grow !== undefined && grow < 1) {
+    const s = 0.55 + 0.45 * easeOut(grow);
+    const cx = t.cx, cy = t.cy;
+    m = [m[0] * s, m[1] * s, m[2] * s, m[3] * s, cx + (m[4] - cx) * s, cy + (m[5] - cy) * s];
+    ctx.globalAlpha = Math.min(1, grow * 1.6);
+  }
+  ctx.setTransform(
+    base[0] * m[0] + base[2] * m[1], base[1] * m[0] + base[3] * m[1],
+    base[0] * m[2] + base[2] * m[3], base[1] * m[2] + base[3] * m[3],
+    base[0] * m[4] + base[2] * m[5] + base[4], base[1] * m[4] + base[3] * m[5] + base[5]);
+  ctx.fillStyle = t.fill;
+  ctx.fill(tilePath);
+  const detail = px > 7 && grow === undefined;
+  if (detail) {
+    ctx.save();
+    ctx.clip(tilePath);
+    ctx.fillStyle = t.patch; ctx.fill(FEAT.patch);
+    ctx.restore();
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = t.mark;
+    ctx.lineWidth = Math.max(0.6, px * 0.018) / px; ctx.stroke(FEAT.fine);
+    ctx.lineWidth = Math.max(0.8, px * 0.026) / px; ctx.stroke(FEAT.marks);
+    ctx.fillStyle = t.mark; ctx.fill(FEAT.spots);
+    ctx.fillStyle = t.dim ? hexMix(PAPER, INK, 0.5) : PAPER; ctx.fill(FEAT.eye);
+    ctx.lineWidth = Math.max(0.8, px * 0.028) / px; ctx.strokeStyle = INK; ctx.stroke(FEAT.eye);
+    ctx.fillStyle = INK; ctx.fill(FEAT.pupil);
+    ctx.fillStyle = PAPER; ctx.fill(FEAT.glint);
+  }
+  ctx.strokeStyle = INK; ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(0.7, Math.min(2.2, px * 0.045)) / px;
+  ctx.stroke(tilePath);
+  if (state.lines) {
+    ctx.lineWidth = Math.max(1.6, Math.min(5, px * 0.11)) / px;
+    for (let i = 0; i < NV; i++) {
+      const e = t.partner[i];
+      if (e >= 0 && tiles[(e / NV) | 0].a1 !== t.a1) ctx.stroke(edgePaths[i]);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+const easeOut = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+
+// ---------- paper grain ----------
+const grain = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 160;
+  const g = c.getContext('2d'); const d = g.createImageData(160, 160);
+  for (let i = 0; i < d.data.length; i += 4) {
+    const v = Math.random() < 0.5 ? 0 : 255;
+    d.data[i] = d.data[i + 1] = d.data[i + 2] = v; d.data[i + 3] = Math.random() < 0.35 ? 255 : 0;
+  }
+  g.putImageData(d, 0, 0); return c;
+})();
+
+// ---------- view ----------
+const plate = document.getElementById('plate');
+const ctx = plate.getContext('2d');
+const rail = document.getElementById('rail');
+let W = 0, H = 0, DPR = 1;
+const view = { cx: C0.x, cy: C0.y, s: 16, rot: 0.35 };
+let focal = { x: 0, y: 0 };
+function computeFocal() {
+  const phone = innerWidth <= 720;
+  const r = rail.getBoundingClientRect();
+  if (rail.classList.contains('collapsed')) return { x: W / 2, y: H / 2 };
+  if (phone) return { x: W / 2, y: Math.max(H * 0.25, (r.top) / 2) };
+  return { x: (r.right + W) / 2, y: H / 2 };
+}
+function resize() {
+  DPR = Math.min(2, devicePixelRatio || 1);
+  W = innerWidth; H = innerHeight;
+  plate.width = Math.round(W * DPR); plate.height = Math.round(H * DPR);
+  focal = computeFocal();
+  clampView();
+  drawCurveEditor();
+}
+function viewMatrix(dpr) {
+  const c = Math.cos(view.rot) * view.s * dpr, s = Math.sin(view.rot) * view.s * dpr;
+  const fx = focal.x * dpr, fy = focal.y * dpr;
+  return [c, s, -s, c, fx - (c * view.cx - s * view.cy), fy - (s * view.cx + c * view.cy)];
+}
+function screenToWorld(x, y) {
+  const dx = x - focal.x, dy = y - focal.y, c = Math.cos(-view.rot), s = Math.sin(-view.rot);
+  return pt(view.cx + (c * dx - s * dy) / view.s, view.cy + (s * dx + c * dy) / view.s);
+}
+function halfDiag() {
+  return Math.max(Math.hypot(focal.x, focal.y), Math.hypot(W - focal.x, focal.y), Math.hypot(focal.x, H - focal.y), Math.hypot(W - focal.x, H - focal.y));
+}
+function minScale() { return halfDiag() / (DISC_R - 4); }
+function clampView() {
+  view.s = Math.min(90, Math.max(minScale(), view.s));
+  const room = DISC_R - 4 - halfDiag() / view.s;
+  const dx = view.cx - C0.x, dy = view.cy - C0.y, d = Math.hypot(dx, dy);
+  if (d > room) { const k = Math.max(0, room) / d; view.cx = C0.x + dx * k; view.cy = C0.y + dy * k; }
+}
+function zoomAt(x, y, k) {
+  endGrow();
+  const w = screenToWorld(x, y);
+  view.s *= k;
+  view.s = Math.min(90, Math.max(minScale(), view.s));
+  const dx = x - focal.x, dy = y - focal.y, c = Math.cos(-view.rot), s = Math.sin(-view.rot);
+  view.cx = w.x - (c * dx - s * dy) / view.s;
+  view.cy = w.y - (s * dx + c * dy) / view.s;
+  clampView();
+}
+
+// ---------- chunk cache ----------
+const CH = 448, PAD = 2;
+let version = 1;
+const cache = new Map();
+let frameNo = 0;
+function chunkZ(pxPerUnit) { return Math.ceil(Math.log2(pxPerUnit) - 0.2); }
+function renderChunk(z, i, j, entry) {
+  const cs = Math.pow(2, z), w = CH / cs, size = CH + 2 * PAD;
+  let c = entry && entry.canvas;
+  if (!c) { c = document.createElement('canvas'); c.width = c.height = size; }
+  const g = c.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = INK; g.fillRect(0, 0, size, size);
+  const x0 = i * w - PAD / cs, y0 = j * w - PAD / cs;
+  const base = [cs, 0, 0, cs, -x0 * cs, -y0 * cs];
+  const list = tilesInRect(x0, y0, x0 + size / cs, y0 + size / cs, []);
+  for (const ti of list) drawTile(g, tiles[ti], base, cs);
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalAlpha = 0.07; g.globalCompositeOperation = 'multiply';
+  g.fillStyle = g.createPattern(grain, 'repeat'); g.fillRect(0, 0, size, size);
+  g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
+  return { canvas: c, version, used: frameNo };
+}
+function visibleChunkRange(z) {
+  const cs = Math.pow(2, z), w = CH / cs;
+  const corners = [[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => screenToWorld(x, y));
+  const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
+  return [Math.floor(Math.min(...xs) / w), Math.floor(Math.min(...ys) / w), Math.floor(Math.max(...xs) / w), Math.floor(Math.max(...ys) / w)];
+}
+function drawChunks(budgetMs) {
+  const px = view.s * DPR;
+  const z = chunkZ(px);
+  const VM = viewMatrix(DPR);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = INK; ctx.fillRect(0, 0, plate.width, plate.height);
+  ctx.setTransform(VM[0], VM[1], VM[2], VM[3], VM[4], VM[5]);
+  ctx.imageSmoothingQuality = 'high';
+  const [i0, j0, i1, j1] = visibleChunkRange(z);
+  const cs = Math.pow(2, z), w = CH / cs, size = CH + 2 * PAD;
+  const t0 = performance.now();
+  // order: centre-out so holes fill from the middle
+  const order = [];
+  for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) order.push([i, j]);
+  const mid = screenToWorld(focal.x, focal.y);
+  order.sort((a, b) => Math.hypot((a[0] + .5) * w - mid.x, (a[1] + .5) * w - mid.y) - Math.hypot((b[0] + .5) * w - mid.x, (b[1] + .5) * w - mid.y));
+  let missing = false;
+  const todo = [];
+  for (const [i, j] of order) {
+    const key = z + ':' + i + ':' + j;
+    const e = cache.get(key);
+    if (!e || e.version !== version) todo.push([i, j, key, e]);
+  }
+  for (const [i, j, key, e] of todo) {
+    if (performance.now() - t0 > budgetMs) { missing = true; break; }
+    cache.set(key, renderChunk(z, i, j, e));
+  }
+  if (missing) { // underpaint with the grow layer and whatever coarser/finer/stale chunks we have
+    drawLayerUnder();
+    ctx.setTransform(VM[0], VM[1], VM[2], VM[3], VM[4], VM[5]);
+    for (const dz of [-1, 1, -2]) drawLevel(z + dz);
+  }
+  drawLevel(z);
+  frameNo++;
+  if (cache.size > 110) {
+    const arr = [...cache.entries()].sort((a, b) => a[1].used - b[1].used);
+    for (let k = 0; k < arr.length - 90; k++) cache.delete(arr[k][0]);
+  }
+  return !missing;
+
+  function drawLevel(zz) {
+    const cz = Math.pow(2, zz), wz = CH / cz, sz = (CH + 2 * PAD) / cz;
+    const [a0, b0, a1, b1] = visibleChunkRange(zz);
+    for (let i = a0; i <= a1; i++) for (let j = b0; j <= b1; j++) {
+      const e = cache.get(zz + ':' + i + ':' + j);
+      if (!e) continue;
+      e.used = frameNo;
+      ctx.drawImage(e.canvas, i * wz - PAD / cz, j * wz - PAD / cz, sz, sz);
+    }
+  }
+}
+
+// ---------- grow-in ----------
+// Finished tiles are painted once onto a screen layer; each frame only redraws the ones still arriving.
+let growing = false, growStart = 0, growList = [], growNext = 0, layer = null, layerVM = null;
+const GROW_TILE = 0.32;
+function startGrow() {
+  const mid = screenToWorld(focal.x, focal.y);
+  const rank = supers[2].map((s, k) => [k, s.n ? Math.hypot(s.sx / s.n - mid.x, s.sy / s.n - mid.y) : 1e9]).sort((a, b) => a[1] - b[1]);
+  const r2 = new Int32Array(supers[2].length); rank.forEach(([k], r) => { r2[k] = r; });
+  const corners = [[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => screenToWorld(x, y));
+  const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
+  const list = tilesInRect(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys), []).map(i => tiles[i]);
+  const first = new Map();
+  for (const t of list) if (!first.has(t.a2) || first.get(t.a2) > t.dfs) first.set(t.a2, t.dfs);
+  // re-rank only the clusters on screen so the opener never waits on off-screen work
+  const onScreen = [...first.keys()].sort((a, b) => r2[a] - r2[b]);
+  const rk = new Map(onScreen.map((k, r) => [k, r]));
+  for (const t of list) t.appear = rk.get(t.a2) * 0.17 + (t.dfs - first.get(t.a2)) * 0.022;
+  list.sort((a, b) => a.appear - b.appear);
+  growList = list; growNext = 0;
+  layer = layer || document.createElement('canvas');
+  layer.width = plate.width; layer.height = plate.height;
+  const lg = layer.getContext('2d');
+  lg.setTransform(1, 0, 0, 1, 0, 0); lg.fillStyle = INK; lg.fillRect(0, 0, layer.width, layer.height);
+  layerVM = viewMatrix(DPR);
+  growStart = performance.now(); growing = true;
+}
+function endGrow() {
+  if (!growing) return;
+  const lg = layer.getContext('2d');
+  for (; growNext < growList.length; growNext++) drawTile(lg, growList[growNext], layerVM, view.s * DPR);
+  growing = false; needsDraw = true;
+}
+function drawGrowing(now) {
+  const el = (now - growStart) / 1000;
+  const lg = layer.getContext('2d');
+  while (growNext < growList.length && growList[growNext].appear + GROW_TILE <= el) drawTile(lg, growList[growNext++], layerVM, view.s * DPR);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(layer, 0, 0);
+  for (let k = growNext; k < growList.length; k++) {
+    const t = growList[k];
+    const g = (el - t.appear) / GROW_TILE;
+    if (g <= 0) break;
+    drawTile(ctx, t, layerVM, view.s * DPR, g);
+  }
+  if (growNext >= growList.length) { growing = false; needsDraw = true; }
+}
+// Underpaint with the grow layer (re-projected to the current view) while chunks fill in.
+function drawLayerUnder() {
+  if (!layer || !layerVM) return;
+  const A = viewMatrix(DPR), B = layerVM;
+  const det = B[0] * B[3] - B[1] * B[2];
+  const Bi = [B[3] / det, -B[1] / det, -B[2] / det, B[0] / det, (B[2] * B[5] - B[3] * B[4]) / det, (B[1] * B[4] - B[0] * B[5]) / det];
+  const M = [A[0] * Bi[0] + A[2] * Bi[1], A[1] * Bi[0] + A[3] * Bi[1], A[0] * Bi[2] + A[2] * Bi[3], A[1] * Bi[2] + A[3] * Bi[3],
+    A[0] * Bi[4] + A[2] * Bi[5] + A[4], A[1] * Bi[4] + A[3] * Bi[5] + A[5]];
+  ctx.setTransform(M[0], M[1], M[2], M[3], M[4], M[5]);
+  ctx.drawImage(layer, 0, 0);
+}
+
+// ---------- loop ----------
+let last = performance.now(), idleUntil = 0, needsDraw = true;
+let driftT = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (state.drift && now > idleUntil && !dragging && !growing) {
+    driftT += dt;
+    const ang = driftT * 0.045 + 0.6;
+    view.cx += Math.cos(ang) * 0.55 * dt; view.cy += Math.sin(ang) * 0.55 * dt;
+    view.cx += (C0.x - view.cx) * 0.004 * dt; view.cy += (C0.y - view.cy) * 0.004 * dt;
+    view.rot += 0.006 * dt;
+    view.s *= 1 + Math.sin(driftT * 0.09) * 0.0035 * dt;
+    clampView();
+    needsDraw = true;
+  }
+  if (growing) {
+    drawGrowing(now);
+  } else if (needsDraw || stale) {
+    const complete = drawChunks(stale ? 14 : 22);
+    stale = !complete;
+    if (complete && layerVersion !== -1) { layerVersion = -1; layerVM = null; }
+    needsDraw = false;
+  }
+  requestAnimationFrame(frame);
+}
+let stale = false, layerVersion = 0;
+function invalidate() { version++; stale = true; needsDraw = true; }
+
+// ---------- input ----------
+const pointers = new Map();
+let dragging = false, pinch = null;
+plate.addEventListener('pointerdown', (e) => {
+  plate.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  dragging = true; plate.classList.add('dragging'); endGrow();
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+  }
+});
+plate.addEventListener('pointermove', (e) => {
+  const p = pointers.get(e.pointerId); if (!p) return;
+  const nx = e.clientX, ny = e.clientY;
+  if (pointers.size === 1) {
+    panBy(nx - p.x, ny - p.y);
+  }
+  p.x = nx; p.y = ny;
+  if (pointers.size === 2 && pinch) {
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    panBy(mx - pinch.mx, my - pinch.my);
+    zoomAt(mx, my, d / pinch.d);
+    pinch = { d, mx, my };
+  }
+  idleUntil = performance.now() + 5000; needsDraw = true;
+});
+const endPtr = (e) => {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (!pointers.size) { dragging = false; plate.classList.remove('dragging'); }
+};
+plate.addEventListener('pointerup', endPtr);
+plate.addEventListener('pointercancel', endPtr);
+function panBy(dx, dy) {
+  endGrow();
+  const c = Math.cos(-view.rot), s = Math.sin(-view.rot);
+  view.cx -= (c * dx - s * dy) / view.s; view.cy -= (s * dx + c * dy) / view.s;
+  clampView(); needsDraw = true;
+}
+plate.addEventListener('wheel', (e) => {
+  e.preventDefault(); endGrow();
+  const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+  zoomAt(e.clientX, e.clientY, Math.exp(-dy * 0.0015));
+  idleUntil = performance.now() + 5000; needsDraw = true;
+}, { passive: false });
+plate.addEventListener('keydown', (e) => {
+  const step = 60;
+  const k = e.key;
+  if (k === 'ArrowLeft') panBy(step, 0); else if (k === 'ArrowRight') panBy(-step, 0);
+  else if (k === 'ArrowUp') panBy(0, step); else if (k === 'ArrowDown') panBy(0, -step);
+  else if (k === '+' || k === '=') zoomAt(focal.x, focal.y, 1.25);
+  else if (k === '-' || k === '_') zoomAt(focal.x, focal.y, 0.8);
+  else return;
+  e.preventDefault(); idleUntil = performance.now() + 5000; needsDraw = true;
+});
+
+// ---------- rail ----------
+const railToggle = document.getElementById('railToggle');
+railToggle.addEventListener('click', () => {
+  const c = rail.classList.toggle('collapsed');
+  railToggle.textContent = c ? 'show' : 'hide';
+  railToggle.setAttribute('aria-expanded', String(!c));
+  focal = computeFocal(); clampView(); needsDraw = true;
+  if (!c) drawCurveEditor();
+});
+function pressGroup(sel, btn) {
+  document.querySelectorAll(sel).forEach(b => { const on = b === btn; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+}
+function setToggle(btn, on) { btn.classList.toggle('on', on); btn.setAttribute('aria-pressed', String(on)); }
+const MODE_HINT = {
+  clusters: 'Colour follows the first-order clusters; heavy lines mark their borders.',
+  turns: 'Colour follows which way each stone is turned. Most take one of six turns sixty degrees apart; the rare gold ones sit thirty degrees between.',
+  proof: 'An uncoloured proof: ink and paper only.',
+};
+document.querySelectorAll('#modes .btn').forEach(b => b.addEventListener('click', () => {
+  state.mode = b.dataset.mode; pressGroup('#modes .btn', b);
+  document.getElementById('modeHint').textContent = MODE_HINT[state.mode] + (state.mystic ? MYSTIC_HINT : '');
+  assignColours(); invalidate();
+}));
+const MYSTIC_HINT = ' Lit: the Mystics, the one cluster made of two stones, the second set at an odd thirty degrees to all the rest.';
+document.getElementById('mystic').addEventListener('click', (e) => {
+  state.mystic = !state.mystic; setToggle(e.currentTarget, state.mystic);
+  document.getElementById('modeHint').textContent = MODE_HINT[state.mode] + (state.mystic ? MYSTIC_HINT : '');
+  assignColours(); invalidate();
+});
+document.getElementById('lines').addEventListener('click', (e) => {
+  state.lines = !state.lines; setToggle(e.currentTarget, state.lines); invalidate();
+});
+document.getElementById('drift').addEventListener('click', (e) => {
+  state.drift = !state.drift; setToggle(e.currentTarget, state.drift);
+});
+document.getElementById('regrow').addEventListener('click', () => { endGrow(); startGrow(); });
+document.getElementById('zin').addEventListener('click', () => { zoomAt(focal.x, focal.y, 1.3); needsDraw = true; });
+document.getElementById('zout').addEventListener('click', () => { zoomAt(focal.x, focal.y, 1 / 1.3); needsDraw = true; });
+document.querySelectorAll('#presets .btn').forEach(b => b.addEventListener('click', () => {
+  knots = PRESETS[b.dataset.preset].map(k => k.slice()); pressGroup('#presets .btn', b);
+  curveChanged();
+}));
+
+// ---------- curve editor ----------
+const cv = document.getElementById('curve');
+const cg = cv.getContext('2d');
+let sel = 0, cdrag = -1;
+function editorFrame() {
+  const r = cv.getBoundingClientRect();
+  const w = r.width, h = r.height;
+  const unit = Math.min(w - 36, h * 2.1);
+  return { w, h, unit, ox: (w - unit) / 2, oy: h / 2 };
+}
+function drawCurveEditor() {
+  const r = cv.getBoundingClientRect(); if (!r.width) return;
+  const d = Math.min(2, devicePixelRatio || 1);
+  cv.width = Math.round(r.width * d); cv.height = Math.round(r.height * d);
+  const F = editorFrame();
+  cg.setTransform(d, 0, 0, d, 0, 0);
+  cg.clearRect(0, 0, F.w, F.h);
+  const X = (u, v) => [F.ox + u * F.unit, F.oy - v * F.unit];
+  // guide
+  cg.strokeStyle = '#3a3e47'; cg.lineWidth = 1; cg.setLineDash([3, 4]);
+  cg.beginPath(); cg.moveTo(...X(0, 0)); cg.lineTo(...X(1, 0)); cg.stroke();
+  cg.beginPath(); cg.moveTo(...X(0.5, -VMAX)); cg.lineTo(...X(0.5, VMAX)); cg.stroke();
+  cg.setLineDash([]);
+  // curve
+  const segs = curveSegments();
+  cg.beginPath(); cg.moveTo(...X(0, 0));
+  for (const [c1, c2, p] of segs) cg.bezierCurveTo(...X(...c1), ...X(...c2), ...X(...p));
+  cg.strokeStyle = PAPER; cg.lineWidth = 2.4; cg.lineCap = 'round'; cg.stroke();
+  // vertices
+  for (const u of [0, 1]) { cg.fillStyle = PAPER; cg.beginPath(); cg.arc(...X(u, 0), 3.5, 0, 7); cg.fill(); }
+  // centre of symmetry
+  const [mx, my] = X(0.5, 0);
+  cg.strokeStyle = '#d2b96f'; cg.lineWidth = 1.2;
+  cg.beginPath(); cg.moveTo(mx - 5, my - 5); cg.lineTo(mx + 5, my + 5); cg.moveTo(mx + 5, my - 5); cg.lineTo(mx - 5, my + 5); cg.stroke();
+  // knots
+  knots.forEach((k, idx) => {
+    const [x, y] = X(k[0], k[1]);
+    const [gx, gy] = X(1 - k[0], -k[1]);
+    cg.strokeStyle = '#8b8a83'; cg.lineWidth = 1.2;
+    cg.beginPath(); cg.arc(gx, gy, 5, 0, 7); cg.stroke();
+    cg.fillStyle = idx === sel && document.activeElement === cv ? '#f0d68a' : '#d2b96f';
+    cg.beginPath(); cg.arc(x, y, 6.5, 0, 7); cg.fill();
+    cg.strokeStyle = INK; cg.lineWidth = 1.5; cg.stroke();
+  });
+  cg.fillStyle = '#7f7c74'; cg.font = '10px "IBM Plex Mono", monospace';
+  cg.fillText('a', X(0, 0)[0] - 4, X(0, 0)[1] + 16);
+  cg.fillText('b', X(1, 0)[0] - 3, X(1, 0)[1] + 16);
+}
+function setKnot(idx, u, v) {
+  u = Math.min(0.46, Math.max(0.04, u)); v = Math.min(VMAX, Math.max(-VMAX, v));
+  if (idx === 0) u = Math.min(u, knots[1][0] - 0.04); else u = Math.max(u, knots[0][0] + 0.04);
+  knots[idx] = [u, v];
+  pressGroup('#presets .btn', null);
+  curveChanged();
+}
+cv.addEventListener('pointerdown', (e) => {
+  const r = cv.getBoundingClientRect(), F = editorFrame();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  let best = -1, bd = 1e9;
+  knots.forEach((k, idx) => {
+    for (const [u, v, mirror] of [[k[0], k[1], false], [1 - k[0], -k[1], true]]) {
+      const d = Math.hypot(F.ox + u * F.unit - x, F.oy - v * F.unit - y);
+      if (d < bd) { bd = d; best = mirror ? idx + 10 : idx; }
+    }
+  });
+  if (bd < 26) { cdrag = best; sel = best % 10; cv.setPointerCapture(e.pointerId); e.preventDefault(); }
+});
+cv.addEventListener('pointermove', (e) => {
+  if (cdrag < 0) return;
+  const r = cv.getBoundingClientRect(), F = editorFrame();
+  let u = (e.clientX - r.left - F.ox) / F.unit, v = (F.oy - (e.clientY - r.top)) / F.unit;
+  if (cdrag >= 10) { u = 1 - u; v = -v; }
+  setKnot(cdrag % 10, u, v);
+});
+const endC = () => { cdrag = -1; };
+cv.addEventListener('pointerup', endC); cv.addEventListener('pointercancel', endC);
+cv.addEventListener('focus', drawCurveEditor); cv.addEventListener('blur', drawCurveEditor);
+cv.addEventListener('keydown', (e) => {
+  const k = knots[sel], st = e.shiftKey ? 0.05 : 0.015;
+  if (e.key === 'Tab' && !e.shiftKey && sel === 0) { sel = 1; drawCurveEditor(); e.preventDefault(); return; }
+  if (e.key === 'Tab' && e.shiftKey && sel === 1) { sel = 0; drawCurveEditor(); e.preventDefault(); return; }
+  if (e.key === 'ArrowLeft') setKnot(sel, k[0] - st, k[1]);
+  else if (e.key === 'ArrowRight') setKnot(sel, k[0] + st, k[1]);
+  else if (e.key === 'ArrowUp') setKnot(sel, k[0], k[1] + st);
+  else if (e.key === 'ArrowDown') setKnot(sel, k[0], k[1] - st);
+  else return;
+  e.preventDefault();
+});
+let checkTimer = 0;
+function curveChanged() {
+  buildTilePaths(); drawCurveEditor(); invalidate();
+  clearTimeout(checkTimer); checkTimer = setTimeout(curvedCheck, 250);
+}
+
+// ---------- self-check ----------
+const proofEl = document.getElementById('proof');
+const check = { };
+function straightCheck() {
+  let paired = 0, interiorOpen = 0, boundary = 0, reflected = 0;
+  for (const t of tiles) {
+    const det = t.m[0] * t.m[3] - t.m[1] * t.m[2];
+    if (det < 0) reflected++;
+    const inner = Math.hypot(t.cx - C0.x, t.cy - C0.y) < DISC_R - 6;
+    for (let i = 0; i < NV; i++) {
+      if (t.partner[i] >= 0) paired++;
+      else if (inner) interiorOpen++; else boundary++;
+    }
+  }
+  // sample points: each must lie in exactly one tile (straight-edged)
+  const inPoly = (P, x, y) => { let c = false; for (let i = 0, j = P.length - 1; i < P.length; j = i++) if ((P[i].y > y) !== (P[j].y > y) && x < (P[j].x - P[i].x) * (y - P[i].y) / (P[j].y - P[i].y) + P[i].x) c = !c; return c; };
+  let seed = 12345; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const N = 3000, hist = [0, 0, 0];
+  for (let s = 0; s < N; s++) {
+    const r = Math.sqrt(rnd()) * (DISC_R - 6), a = rnd() * Math.PI * 2;
+    const x = C0.x + r * Math.cos(a), y = C0.y + r * Math.sin(a);
+    let n = 0;
+    for (const ti of tilesInRect(x, y, x, y, [])) if (inPoly(tiles[ti].w, x, y)) n++;
+    hist[Math.min(n, 2)]++;
+  }
+  Object.assign(check, { tiles: tiles.length, mystics: tiles.filter(t => t.odd).length, paired, interiorOpen, boundary, sameDirDupes, reflected, samples: N, once: hist[1], gaps: hist[0], overlaps: hist[2] });
+}
+function curvedCheck() {
+  // for every shared edge, sample the curve from both tiles and measure the worst disagreement
+  const segs = SEGS;
+  let worst = 0, n = 0;
+  const local = (i, u) => {
+    const a = SPECTRE[i], b = SPECTRE[(i + 1) % NV], dx = b.x - a.x, dy = b.y - a.y;
+    const [cu, cvv] = curveAt(segs, u);
+    return pt(a.x + cu * dx - cvv * dy, a.y + cu * dy + cvv * dx);
+  };
+  for (let ti = 0; ti < tiles.length; ti++) {
+    const t = tiles[ti];
+    for (let i = 0; i < NV; i++) {
+      const e = t.partner[i]; if (e < 0) continue;
+      const o = tiles[(e / NV) | 0], oi = e % NV;
+      for (const u of [0.13, 0.31, 0.62, 0.86]) {
+        const p = wv(t, local(i, u)), q = wv(o, local(oi, 1 - u));
+        worst = Math.max(worst, Math.hypot(p.x - q.x, p.y - q.y)); n++;
+      }
+    }
+  }
+  check.curveSamples = n; check.curveWorst = worst;
+  renderProof();
+  window.__einsteinCheck = { ...check };
+}
+function renderProof() {
+  const ok = check.interiorOpen === 0 && check.sameDirDupes === 0 && check.gaps === 0 && check.overlaps === 0 && check.reflected === 0;
+  const f = (n) => n.toLocaleString('en-US');
+  proofEl.innerHTML =
+    `${f(check.tiles)} stones, ${f(check.mystics)} of them turned the odd thirty degrees, ${check.reflected === 0 ? '<b>none mirrored</b>' : `<span class="bad">${check.reflected} mirrored</span>`}.<br>` +
+    `Edges met by exactly one partner, reversed: <b>${f(check.paired)}</b>. Open edges inside the plate: <b class="${check.interiorOpen ? 'bad' : ''}">${check.interiorOpen}</b>. Doubled: <b class="${check.sameDirDupes ? 'bad' : ''}">${check.sameDirDupes}</b>.<br>` +
+    `Random points covered exactly once: <b>${f(check.once)} / ${f(check.samples)}</b> (gaps ${check.gaps}, overlaps ${check.overlaps}).<br>` +
+    (check.curveSamples ? `Bent edge, both sides sampled ${f(check.curveSamples)} times: worst mismatch <b>${check.curveWorst.toExponential(1)}</b> edge-lengths.` : '') +
+    (ok ? '' : '<br><span class="bad">Check failed.</span>');
+}
+
+// ---------- go ----------
+buildTilePaths();
+buildFeatures();
+assignColours();
+const phone0 = innerWidth <= 720;
+view.s = phone0 ? 22 : 30;
+resize();
+addEventListener('resize', () => { resize(); needsDraw = true; });
+if (state.drift) startGrow(); else needsDraw = true;
+setTimeout(() => { const t = performance.now(); straightCheck(); curvedCheck(); check.ms = Math.round(performance.now() - t); window.__einsteinCheck = { ...check }; }, state.drift ? 4500 : 300);
+document.getElementById('drift').classList.toggle('on', state.drift);
+document.getElementById('drift').setAttribute('aria-pressed', String(state.drift));
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(drawCurveEditor);
+requestAnimationFrame(frame);
+window.__einstein = { view, state, tiles, setKnot, startGrow, zoomAt, invalidate, assignColours,
+  setView(o) { endGrow(); Object.assign(view, o); clampView(); needsDraw = true; idleUntil = performance.now() + 1e9; } };
+})();
+</script>
+</body>
+</html>
