@@ -1,0 +1,818 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Hole in the Middle</title>
+<link rel="stylesheet" href="../studio.css">
+<style>
+:root { --print: #c79461; --lamp: #f2d88c; }
+.rail { gap: 11px; }
+.plate { cursor: grab; }
+.plate.dragging { cursor: grabbing; }
+.readout { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.readout b { font: 500 12px var(--mono); color: var(--paper); }
+.twistnote { min-height: 3em; }
+.zr { display: inline-flex; align-items: center; gap: 10px; }
+.btn.mini { padding: 5px 8px; font-size: 11px; }
+.file { justify-content: center; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.file { position: relative; display: inline-flex; align-items: center; }
+.file input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.file:focus-within { outline: 2px solid var(--print); outline-offset: 2px; }
+.math i { font-style: normal; color: var(--lamp); }
+#panelCap { position: absolute; pointer-events: none; z-index: 2; display: none; }
+#panelCap span { position: absolute; font: 500 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--paper); background: color-mix(in oklab, var(--ink) 78%, transparent); padding: 4px 6px; }
+#panelCap .tl { left: 8px; top: 8px; }
+#panelCap .br { right: 8px; bottom: 8px; color: var(--lamp); }
+#drop { position: absolute; inset: 0; z-index: 9; display: none; place-items: center; pointer-events: none;
+  background: color-mix(in oklab, var(--ink) 70%, transparent); border: 2px dashed var(--print);
+  font: 800 40px var(--display); text-transform: uppercase; color: var(--paper); }
+#drop.on { display: grid; }
+#nogl { position: absolute; inset: 0; display: none; place-items: center; padding: 24px; text-align: center; color: var(--paper-dim); }
+</style>
+</head>
+<body>
+<div class="room">
+  <canvas class="plate" id="plate" aria-label="A picture of a lamplit map archive bent into a conformal spiral that zooms into its own centre forever"></canvas>
+  <div id="panelCap"><span class="tl">unrolled · log r → · angle ↑</span><span class="br">gold edges are one line</span></div>
+  <div id="nogl">This room needs WebGL2.</div>
+  <aside class="rail" id="rail">
+    <div class="rail-head"><a class="back" href="../index.html">← Studio</a>
+      <button class="toggle" id="railToggle" aria-expanded="true">hide</button></div>
+    <h1 class="room-title">The Hole in the <em>Middle</em></h1>
+    <p class="lede">In <i>Print Gallery</i> (1956) a print swells around until it contains the gallery it hangs in, but Escher could not resolve the centre and left a blank patch with his monogram. In 2003 <b>Hendrik Lenstra</b> and <b>Bart de Smit</b> showed the picture follows a conformal Droste map, a twisted complex logarithm, and computed how the centre should be filled. Here it is filled, all the way down.</p>
+
+    <div class="group">
+      <div class="readout"><span class="label">Twist</span><b id="twistVal">1.00</b></div>
+      <input type="range" id="twist" min="0" max="1" step="0.01" value="1" aria-label="Twist">
+      <p class="note twistnote" id="twistNote"></p>
+      <p class="math" id="alphaMath"></p>
+    </div>
+
+    <div class="group">
+      <div class="readout"><span class="label">Strands</span><b id="strandVal">1</b></div>
+      <input type="range" id="strands" min="1" max="5" step="1" value="1" aria-label="Number of spiral strands">
+      <div class="readout"><span class="label">Zoom</span><span class="zr"><b id="speedVal"></b><button class="btn mini" id="pause" aria-pressed="false">pause</button></span></div>
+      <input type="range" id="speed" min="-1" max="1" step="0.01" value="0.4" aria-label="Zoom speed (left out, right in)">
+    </div>
+
+    <div class="group">
+      <span class="label">Show the machinery</span>
+      <div class="seg">
+        <button class="btn" id="vUnroll" aria-pressed="false">unrolled strip</button>
+        <button class="btn" id="vGrid" aria-pressed="false">log grid</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <span class="label">Picture</span>
+      <div class="seg">
+        <button class="btn on" id="pArchive" aria-pressed="true">map archive</button>
+        <label class="btn file" id="pUpload"><span>your image…</span><input type="file" accept="image/*" id="file"></label>
+      </div>
+      <div id="insetWrap" hidden>
+        <div class="readout"><span class="label">Frame inset</span><b id="insetVal"></b></div>
+        <input type="range" id="inset" min="0.08" max="0.45" step="0.01" value="0.25" aria-label="Frame inset: size of the hole relative to the picture">
+      </div>
+      <p class="note">Drag moves the centre; wheel or pinch zooms. Drop an image anywhere.</p>
+    </div>
+  </aside>
+  <div id="drop">drop an image</div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const TAU = Math.PI * 2;
+const S = 2048;          // source layer resolution
+const TEXR = 1.2;        // each layer covers [-TEXR, TEXR]^2 of its own frame (blend margin past the unit circle)
+const CUT = Math.PI / 2; // the branch cut of the angle points straight up
+
+// ---------- colour ----------
+const C = {
+  ink: '#22170e', inkSoft: '#3a2817', paper: '#efe4c7', paperL: '#f6eedb', paper2: '#dfcda7',
+  sepiaL: '#c9a473', sepia: '#a87a4c', umber: '#7a4a28', umberD: '#4b2c17', umberDD: '#2e1b0e',
+  lamp: '#f3d887', lampPale: '#efdfb0', lampHot: '#fff5d6',
+};
+const rgbCache = new Map();
+const rgbOf = h => { let v = rgbCache.get(h); if (!v) { const n = parseInt(h.slice(1), 16); v = [n >> 16 & 255, n >> 8 & 255, n & 255]; rgbCache.set(h, v); } return v; };
+const mixC = (a, b, t, al = 1) => { const A = rgbOf(a), B = rgbOf(b); const r = Math.round(A[0] + (B[0] - A[0]) * t), g = Math.round(A[1] + (B[1] - A[1]) * t), bl = Math.round(A[2] + (B[2] - A[2]) * t); return al < 1 ? `rgba(${r},${g},${bl},${al})` : `rgb(${r},${g},${bl})`; };
+const rgba = (h, a) => { const v = rgbOf(h); return `rgba(${v[0]},${v[1]},${v[2]},${a})`; };
+const hash = (a, b = 0, c = 0, d = 0) => { const x = Math.sin(a * 127.1 + b * 311.7 + c * 74.7 + d * 191.3) * 43758.5453; return x - Math.floor(x); };
+
+// =====================================================================
+// The source picture: a lamplit map archive in one-point perspective.
+// Drawn in its own unit square [-1,1]^2 (y up). Its far wall has a square
+// opening of half-size 1/16 that holds the whole picture again (s = 16).
+// Bays, lamps and waves are spaced geometrically in depth so the picture
+// is evenly paced in log-radius, which is the coordinate the spiral uses.
+// =====================================================================
+function drawArchive(ctx, ppu, win) {
+  const D = 8, CF = 0.86, ZN = 0.66, TOP = -0.18;
+  const px = 1 / ppu;
+  const lnD = Math.log(D);
+  const dz = z => Math.min(1, Math.max(0, Math.log(z) / lnD));
+  const pr = (X, Y, Z) => [X / Z, Y / Z];
+  const zb = b => Math.pow(2, b / 3);
+
+  function path(p) { ctx.beginPath(); ctx.moveTo(p[0][0], p[0][1]); for (let i = 1; i < p.length; i++) ctx.lineTo(p[i][0], p[i][1]); ctx.closePath(); }
+  function vis(p, minPx = 0.2) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const q of p) { if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1]; }
+    if (x1 < -win || x0 > win || y1 < -win || y0 > win) return false;
+    return (x1 - x0) > minPx * px || (y1 - y0) > minPx * px;
+  }
+  function fill(p, style) { if (!vis(p)) return false; path(p); ctx.fillStyle = style; ctx.fill(); return true; }
+  const wallQ = (Xw, z0, z1, Y0, Y1) => [pr(Xw, Y0, z0), pr(Xw, Y0, z1), pr(Xw, Y1, z1), pr(Xw, Y1, z0)];
+  const horQ = (X0, X1, z0, z1, Y) => [pr(X0, Y, z0), pr(X1, Y, z0), pr(X1, Y, z1), pr(X0, Y, z1)];
+  // a tapered ink line between two world points (width w in world units, so it thins with depth)
+  function wedge(a, b, w, style) {
+    const A = pr(a[0], a[1], a[2]), B = pr(b[0], b[1], b[2]);
+    const dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L;
+    const ha = w / (2 * a[2]), hb = w / (2 * b[2]);
+    fill([[A[0] + nx * ha, A[1] + ny * ha], [B[0] + nx * hb, B[1] + ny * hb], [B[0] - nx * hb, B[1] - ny * hb], [A[0] - nx * ha, A[1] - ny * ha]], style);
+  }
+  function depthGrad(p0, p1, cNear, cFar, curve = 1) {
+    const g = ctx.createLinearGradient(p0[0], p0[1], p1[0], p1[1]);
+    for (let i = 0; i <= 12; i++) {
+      const z = ZN * Math.pow(D / ZN, i / 12), t = (1 / ZN - 1 / z) / (1 / ZN - 1 / D);
+      g.addColorStop(Math.min(1, Math.max(0, t)), mixC(cNear, cFar, Math.pow(dz(z), curve)));
+    }
+    return g;
+  }
+  function glow(cx, cy, rx, ry, color, a, op = 'screen') {
+    if (!vis([[cx - rx, cy - ry], [cx + rx, cy + ry]])) return;
+    ctx.save(); ctx.globalCompositeOperation = op; ctx.translate(cx, cy); ctx.scale(rx, ry);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    g.addColorStop(0, rgba(color, a)); g.addColorStop(0.35, rgba(color, a * 0.55)); g.addColorStop(1, rgba(color, 0));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, 1, 0, TAU); ctx.fill(); ctx.restore();
+  }
+
+  const LAMPS = [1.25, 2.5, 5];
+
+  // ---- far wall ----
+  const F = 1 / D, HO = 1 / 16;
+  fill([[-F, -F], [F, -F], [F, F], [-F, F]], mixC(C.sepia, C.umberD, 0.45));
+  // plaster: faint vertical strokes
+  for (let i = 0; i < 26; i++) {
+    const x = -F + (i + 0.5) * (2 * F / 26);
+    if (Math.abs(x) < HO * 1.25) continue;
+    fill([[x - F * 0.004, -F], [x + F * 0.004, -F], [x + F * 0.004, F], [x - F * 0.004, F]], rgba(C.ink, 0.18));
+  }
+  // architrave: stepped moulding around the opening
+  const sq = h => [[-h, -h], [h, -h], [h, h], [-h, h]];
+  fill(sq(HO * 1.36), rgba(C.ink, 0.35));
+  fill(sq(HO * 1.32), C.umber);
+  fill(sq(HO * 1.24), C.sepiaL);
+  fill(sq(HO * 1.17), C.umberD);
+  fill(sq(HO * 1.08), C.ink);
+  // lintel + keystone
+  fill([[-HO * 1.42, HO * 1.36], [HO * 1.42, HO * 1.36], [HO * 1.42, HO * 1.5], [-HO * 1.42, HO * 1.5]], C.umber);
+  fill([[-HO * 0.16, HO * 1.18], [HO * 0.16, HO * 1.18], [HO * 0.22, HO * 1.56], [-HO * 0.22, HO * 1.56]], C.sepiaL);
+  fill([[-HO * 0.16, HO * 1.18], [HO * 0.16, HO * 1.18], [HO * 0.22, HO * 1.56], [-HO * 0.22, HO * 1.56]].map(p => [p[0] * 0.55, p[1]]), rgba(C.ink, 0.25));
+  // threshold step
+  fill([[-HO * 1.5, -F], [HO * 1.5, -F], [HO * 1.36, -HO * 1.36], [-HO * 1.36, -HO * 1.36]], C.sepia);
+  // sconces either side
+  for (const sx of [-1, 1]) {
+    const cx = sx * F * 0.78, cy = F * 0.08;
+    glow(cx, cy + F * 0.06, F * 0.32, F * 0.32, C.lamp, 0.55);
+    fill([[cx - F * 0.03, cy - F * 0.1], [cx + F * 0.03, cy - F * 0.1], [cx + F * 0.05, cy], [cx - F * 0.05, cy]], C.ink);
+    fill([[cx - F * 0.012, cy], [cx + F * 0.012, cy], [cx + F * 0.012, cy + F * 0.07], [cx - F * 0.012, cy + F * 0.07]], C.paperL);
+    if (vis([[cx - F * 0.03, cy + F * 0.07], [cx + F * 0.03, cy + F * 0.15]])) {
+      ctx.beginPath(); ctx.ellipse(cx, cy + F * 0.105, F * 0.018, F * 0.035, 0, 0, TAU); ctx.fillStyle = C.lamp; ctx.fill();
+    }
+  }
+
+  // ---- floor ----
+  fill([pr(-1, -1, ZN), pr(1, -1, ZN), pr(1, -1, D), pr(-1, -1, D)], depthGrad([0, -1 / ZN], [0, -1 / D], '#b88b5c', '#5a3920', 0.9));
+  for (let i = 0; i <= 16; i++) {
+    const X = -1 + i / 8;
+    wedge([X, -1, ZN], [X, -1, D], 0.007, rgba(C.ink, 0.55));
+    if (i < 16) {
+      // grain
+      for (let g = 0; g < 2; g++) {
+        const gx = X + 0.035 + g * 0.05, z0 = ZN * Math.pow(2, hash(i, g) * 2), z1 = z0 * (1.4 + hash(g, i) * 1.5);
+        wedge([gx, -1, z0], [gx, -1, Math.min(D, z1)], 0.0035, rgba(C.ink, 0.22));
+      }
+      // butt joints, staggered per board
+      for (let j = -2; j < 10; j++) {
+        const z = Math.pow(2, (j + hash(i, 7)) / 1.5);
+        if (z < ZN || z > D) continue;
+        fill(horQ(X, X + 0.125, z, z * 1.006, -1), rgba(C.ink, 0.5));
+      }
+    }
+  }
+  // shadow under the cabinets
+  for (const sx of [-1, 1]) fill(horQ(sx * CF, sx * (CF - 0.16), ZN, D, -1), rgba(C.ink, 0.22));
+  // runner rug
+  const RZ = 6.6;
+  fill(horQ(-0.46, 0.46, ZN, RZ, -1), C.umberD);
+  fill(horQ(-0.42, 0.42, ZN, RZ * 0.985, -1), C.umber);
+  fill(horQ(-0.37, 0.37, ZN, RZ * 0.965, -1), '#5d331b');
+  // border saw-tooth in lamp yellow
+  for (const sx of [-1, 1]) {
+    for (let u = -10; u < 40; u++) {
+      const z0 = Math.pow(2, u / 6), z1 = Math.pow(2, (u + 1) / 6);
+      if (z1 < ZN || z0 > RZ * 0.97) continue;
+      fill([pr(sx * 0.42, -1, z0), pr(sx * 0.42, -1, z1), pr(sx * 0.375, -1, Math.sqrt(z0 * z1))], rgba(C.lamp, 0.8));
+    }
+  }
+  // medallions
+  for (let j = -1; j <= 5; j++) {
+    const zc = Math.pow(2, j / 2 + 0.25);
+    if (zc * 1.12 > RZ * 0.95) continue;
+    const dmd = (w, f) => [pr(0, -1, zc / f), pr(w, -1, zc), pr(0, -1, zc * f), pr(-w, -1, zc)];
+    fill(dmd(0.27, 1.13), C.lamp);
+    fill(dmd(0.2, 1.09), C.umberD);
+    fill(dmd(0.11, 1.05), C.lampPale);
+    fill(dmd(0.045, 1.02), C.umber);
+    for (const sx of [-1, 1]) {
+      const zz = zc * Math.pow(2, 0.25);
+      if (zz < RZ * 0.93) fill([pr(sx * 0.24, -1, zz / 1.03), pr(sx * 0.27, -1, zz), pr(sx * 0.24, -1, zz * 1.03), pr(sx * 0.21, -1, zz)], rgba(C.lamp, 0.85));
+    }
+  }
+  // fringe
+  for (let X = -0.44; X <= 0.441; X += 0.028) wedge([X, -1, RZ], [X + 0.004, -1, RZ * 1.045], 0.006, rgba(C.paper, 0.75));
+  // lamp pools on the floor
+  for (const zl of LAMPS) glow(0, -1 / zl, 0.7 / zl, 0.7 / (zl * zl) + 0.12 / zl, C.lamp, 0.55);
+
+  // ---- ceiling ----
+  fill([pr(-1, 1, ZN), pr(1, 1, ZN), pr(1, 1, D), pr(-1, 1, D)], depthGrad([0, 1 / ZN], [0, 1 / D], '#5b3920', '#24160b', 0.8));
+  for (let X = -0.975; X < 1; X += 0.05) {
+    if (Math.abs(Math.abs(X) - 0.5) < 0.04 || Math.abs(X) < 0.04) continue;
+    wedge([X, 1, ZN], [X, 1, D], 0.006, rgba(C.ink, 0.5));
+  }
+  for (const X of [-0.5, 0, 0.5]) {
+    fill(horQ(X - 0.032, X + 0.032, ZN, D, 1), depthGrad([0, 1 / ZN], [0, 1 / D], '#8a5c35', '#3c2614'));
+    wedge([X - 0.032, 1, ZN], [X - 0.032, 1, D], 0.004, rgba(C.ink, 0.7));
+    wedge([X + 0.032, 1, ZN], [X + 0.032, 1, D], 0.004, rgba(C.ink, 0.7));
+  }
+  for (let b = -2; b < 9; b++) {
+    const z = zb(b);
+    const t = dz(z);
+    fill(horQ(-1, 1, z, z * 1.05, 0.955), mixC('#3f2715', '#1e120a', t));               // underside
+    fill([pr(-1, 1, z), pr(1, 1, z), pr(1, 0.955, z), pr(-1, 0.955, z)], mixC('#b5895a', '#5a3a20', t)); // lit face
+    fill([pr(-1, 0.955, z), pr(1, 0.955, z), pr(1, 0.948, z), pr(-1, 0.948, z)], rgba(C.ink, 0.8));
+  }
+
+  // ---- side walls ----
+  for (const sx of [-1, 1]) {
+    // upper wall
+    fill([pr(sx, TOP, ZN), pr(sx, TOP, D), pr(sx, 1, D), pr(sx, 1, ZN)], depthGrad([sx / ZN, 0], [sx / D, 0], C.paper2, '#6b4b2c', 0.9));
+    // pigeonhole case
+    const PY0 = TOP + 0.02, PY1 = 0.7, ROWS = 4, RH = (PY1 - PY0) / ROWS;
+    fill([pr(sx, PY0, ZN), pr(sx, PY0, D), pr(sx, PY1, D), pr(sx, PY1, ZN)], depthGrad([sx / ZN, 0], [sx / D, 0], '#3b2413', '#1d1109'));
+    for (let b = -2; b < 9; b++) {
+      for (let c = 0; c < 2; c++) {
+        const za = zb(b + c * 0.5), zz = zb(b + c * 0.5 + 0.5);
+        const zi0 = za * 1.03, zi1 = zz;
+        const t = dz(za);
+        for (let r = 0; r < ROWS; r++) {
+          const Y0 = PY0 + r * RH + 0.014, Y1 = PY0 + (r + 1) * RH - 0.014;
+          const zm = Math.sqrt(zi0 * zi1);
+          const box = [pr(sx, Y0, zi0), pr(sx, Y1, zi1)];
+          if (!vis(box, 0.5)) continue;
+          // inner shadow on the far side and top of the cubby
+          fill(wallQ(sx, zi0, zi1, Y1 - 0.03, Y1), rgba(C.ink, 0.45));
+          const hp = (Y1 - Y0) / zm;
+          if (hp * ppu < 2.5) continue;
+          const h = hash(b, c, r, sx), cnt = 1 + Math.floor(h * 3);
+          const spots = cnt === 1 ? [[0.5, 0.36]] : cnt === 2 ? [[0.3, 0.3], [0.7, 0.33]] : [[0.27, 0.27], [0.72, 0.28], [0.5, 0.69]];
+          spots.forEach(([u, v], k) => {
+            const zu = zi0 + u * (zi1 - zi0), Yv = Y0 + v * (Y1 - Y0);
+            const cx = sx / zu, cy = Yv / zu;
+            const ry = hp * (0.2 + 0.05 * hash(k, b, r, c)), rx = ry * 0.62;
+            const hh = hash(k + 3, b, c, r);
+            const col = hh < 0.5 ? C.paper : hh < 0.8 ? C.lampPale : C.sepiaL;
+            ctx.beginPath(); ctx.ellipse(cx - sx * rx * 0.25, cy - ry * 0.18, rx, ry, 0, 0, TAU); ctx.fillStyle = rgba(C.ink, 0.5); ctx.fill();
+            ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, TAU); ctx.fillStyle = mixC(col, '#6b4b2c', t * 0.7); ctx.fill();
+            if (ry * ppu > 3) {
+              ctx.lineWidth = 0.0035 / zu; ctx.strokeStyle = rgba(C.ink, 0.75); ctx.stroke();
+              ctx.beginPath();
+              const turns = 2.6 + hh;
+              for (let q = 0; q <= 60; q++) {
+                const a = q / 60 * turns * TAU, rr = 0.12 + 0.8 * q / 60;
+                const X = cx + Math.cos(a + h * 6) * rx * rr, Y = cy + Math.sin(a + h * 6) * ry * rr;
+                q ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y);
+              }
+              ctx.lineWidth = 0.0025 / zu; ctx.strokeStyle = rgba(C.ink, 0.55); ctx.stroke();
+            }
+          });
+        }
+        // vertical divider
+        fill(wallQ(sx, za, za * 1.03, PY0, PY1), mixC(C.sepiaL, '#5b3d22', t));
+      }
+    }
+    for (let r = 0; r <= ROWS; r++) {
+      const Y = PY0 + r * RH;
+      fill([pr(sx, Y - 0.014, ZN), pr(sx, Y - 0.014, D), pr(sx, Y + 0.014, D), pr(sx, Y + 0.014, ZN)], depthGrad([sx / ZN, 0], [sx / D, 0], C.sepiaL, '#5b3d22'));
+      wedge([sx, Y - 0.014, ZN], [sx, Y - 0.014, D], 0.004, rgba(C.ink, 0.7));
+    }
+    // frieze of running waves (four crests per doubling of depth)
+    const FY0 = 0.73, FY1 = 0.93;
+    fill([pr(sx, FY0, ZN), pr(sx, FY0, D), pr(sx, FY1, D), pr(sx, FY1, ZN)], depthGrad([sx / ZN, 0], [sx / D, 0], C.paperL, '#7c5a36'));
+    const u0 = Math.floor(4 * Math.log2(ZN)), u1 = 4 * Math.log2(D);
+    for (let u = u0; u < u1; u++) {
+      const pts = [];
+      for (let q = 0; q <= 24; q++) {
+        const uu = u + q / 24, z = Math.pow(2, uu / 4);
+        const ph = uu * TAU;
+        pts.push(pr(sx, 0.81 + 0.05 * Math.sin(ph) + 0.018 * Math.sin(2 * ph + 1.2), Math.min(D, Math.max(ZN, z))));
+      }
+      const zc = Math.pow(2, (u + 0.5) / 4);
+      const body = pts.concat([pr(sx, FY0 + 0.012, Math.min(D, Math.pow(2, (u + 1) / 4))), pr(sx, FY0 + 0.012, Math.max(ZN, Math.pow(2, u / 4)))]);
+      if (!vis(body)) continue;
+      path(body); ctx.fillStyle = mixC(C.sepia, '#4b2c17', dz(zc) * 0.8); ctx.fill();
+      ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+      ctx.lineWidth = 0.007 / zc; ctx.strokeStyle = C.ink; ctx.stroke();
+      // engraved echo of the wave
+      ctx.beginPath();
+      for (let q = 0; q <= 24; q++) {
+        const uu = u + q / 24, z = Math.min(D, Math.max(ZN, Math.pow(2, uu / 4))), ph = uu * TAU;
+        const p = pr(sx, 0.785 + 0.042 * Math.sin(ph - 0.35) + 0.014 * Math.sin(2 * ph + 0.9), z);
+        q ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]);
+      }
+      ctx.lineWidth = 0.0035 / zc; ctx.strokeStyle = rgba(C.paperL, 0.55); ctx.stroke();
+    }
+    wedge([sx, FY0, ZN], [sx, FY0, D], 0.006, C.ink);
+    wedge([sx, FY1, ZN], [sx, FY1, D], 0.006, C.ink);
+    // cornice + dentils
+    fill([pr(sx, FY1, ZN), pr(sx, FY1, D), pr(sx, 1, D), pr(sx, 1, ZN)], depthGrad([sx / ZN, 0], [sx / D, 0], C.umberD, C.umberDD));
+    for (let u = Math.floor(12 * Math.log2(ZN)); u < 36; u++) {
+      const z = Math.pow(2, u / 12);
+      fill(wallQ(sx, z, z * 1.022, 0.947, 0.978), mixC(C.sepiaL, '#4b2c17', dz(z)));
+    }
+    // cabinet top (seen from above)
+    fill([pr(sx * CF, TOP, ZN), pr(sx * CF, TOP, D), pr(sx, TOP, D), pr(sx, TOP, ZN)], depthGrad([sx / ZN, 0], [sx / D, 0], C.paperL, '#8a6a46'));
+    // cabinet front carcass
+    fill([pr(sx * CF, -1, ZN), pr(sx * CF, -1, D), pr(sx * CF, TOP, D), pr(sx * CF, TOP, ZN)], depthGrad([sx * CF / ZN, 0], [sx * CF / D, 0], C.umberD, C.umberDD));
+    // drawers
+    const DR = 6, DY0 = -0.95, DY1 = TOP - 0.03, DH = (DY1 - DY0) / DR;
+    for (let b = -2; b < 9; b++) {
+      const z0 = zb(b), z1 = zb(b + 1), t = dz(z0);
+      // pilaster
+      fill(wallQ(sx * CF, z0, z0 * 1.04, -1, TOP), mixC(C.sepia, '#3d2412', t));
+      const za = z0 * 1.055, zz = z1 * 0.992;
+      for (let r = 0; r < DR; r++) {
+        const Ya = DY0 + r * DH + 0.008, Yb = DY0 + (r + 1) * DH - 0.008;
+        if (!fill(wallQ(sx * CF, za, zz, Ya, Yb), mixC('#c19767', '#5b3a1f', Math.pow(t, 0.9)))) continue;
+        fill(wallQ(sx * CF, za, zz, Yb - 0.016, Yb), rgba(C.ink, 0.25));
+        wedge([sx * CF, Ya + DH * 0.33, za], [sx * CF, Ya + DH * 0.33, zz], 0.003, rgba(C.ink, 0.18));
+        const zc = (za + zz) / 2, lw = (zz - za) * 0.15;
+        fill(wallQ(sx * CF, zc - lw, zc + lw, Yb - 0.05, Yb - 0.022), mixC(C.lampPale, '#8a6a46', t));
+        if (fill(wallQ(sx * CF, zc - lw * 0.7, zc + lw * 0.5, Yb - 0.038, Yb - 0.034), rgba(C.ink, 0.5))) { /* handwriting */ }
+        fill(wallQ(sx * CF, zc - lw * 0.75, zc + lw * 0.75, Yb - 0.082, Yb - 0.066), C.ink);
+      }
+    }
+    fill([pr(sx * CF, -1, ZN), pr(sx * CF, -1, D), pr(sx * CF, -0.95, D), pr(sx * CF, -0.95, ZN)], C.umberDD);
+    wedge([sx * CF, TOP, ZN], [sx * CF, TOP, D], 0.008, C.ink);
+    wedge([sx, TOP, ZN], [sx, TOP, D], 0.004, rgba(C.ink, 0.6));
+    // corner edges of the room
+    wedge([sx, 1, ZN], [sx, 1, D], 0.01, C.ink);
+  }
+
+  // ---- a globe on the left cabinet and a stack of folios on the right ----
+  {
+    const z = 1.5, gx = -0.93 / z, gr = 0.075 / z, gy = (TOP + 0.03 + 0.075) / z;
+    if (vis([[gx - gr, gy - gr * 1.6], [gx + gr, gy + gr]])) {
+      fill([[gx - gr * 0.5, TOP / z], [gx + gr * 0.5, TOP / z], [gx + gr * 0.25, (TOP + 0.03) / z], [gx - gr * 0.25, (TOP + 0.03) / z]], C.ink);
+      ctx.beginPath(); ctx.arc(gx, gy, gr, 0, TAU); ctx.fillStyle = C.lampPale; ctx.fill();
+      ctx.save(); ctx.clip();
+      ctx.lineWidth = 0.003 / z; ctx.strokeStyle = rgba(C.umber, 0.9);
+      for (let k = -2; k <= 2; k++) { ctx.beginPath(); ctx.ellipse(gx, gy, Math.abs(k) * gr * 0.35 + 0.0001, gr, 0.35, 0, TAU); ctx.stroke(); }
+      for (let k = -2; k <= 2; k++) { ctx.beginPath(); ctx.moveTo(gx - gr, gy + k * gr * 0.38); ctx.lineTo(gx + gr, gy + k * gr * 0.38 + gr * 0.2); ctx.stroke(); }
+      ctx.fillStyle = rgba(C.ink, 0.35); ctx.beginPath(); ctx.arc(gx - gr * 0.45, gy - gr * 0.2, gr * 1.05, 0, TAU); ctx.arc(gx, gy, gr * 1.2, 0, TAU, true); ctx.fill('evenodd');
+      ctx.restore();
+      ctx.beginPath(); ctx.arc(gx, gy, gr * 1.12, -2.2, 1.2); ctx.lineWidth = 0.006 / z; ctx.strokeStyle = C.ink; ctx.stroke();
+    }
+    const z2 = 2.6;
+    for (let k = 0; k < 4; k++) {
+      const h0 = TOP + k * 0.028, h1 = h0 + 0.026, o = (hash(k, 4) - 0.5) * 0.06;
+      fill(horQ(0.88, 0.995, z2 * (0.96 + o * 0.2), z2 * (1.12 + o * 0.2), h1), mixC(C.paperL, C.sepiaL, hash(k)));
+      fill([pr(0.88, h0, z2 * (0.96 + o * 0.2)), pr(0.88, h0, z2 * (1.12 + o * 0.2)), pr(0.88, h1, z2 * (1.12 + o * 0.2)), pr(0.88, h1, z2 * (0.96 + o * 0.2))], k % 2 ? C.umber : C.inkSoft);
+    }
+  }
+
+  // ---- light: wall glows, cones, lamps (far to near) ----
+  for (const zl of LAMPS) {
+    for (const sx of [-1, 1]) glow(sx / zl, 0.1 / zl, 0.55 / zl, 0.9 / zl, C.lamp, 0.22);
+    // faint cone of light
+    if (vis([pr(-0.6, -1, zl), pr(0.6, 0.4, zl)])) {
+      ctx.save(); ctx.globalCompositeOperation = 'screen';
+      const g = ctx.createLinearGradient(0, 0.38 / zl, 0, -1 / zl);
+      g.addColorStop(0, rgba(C.lamp, 0.16)); g.addColorStop(1, rgba(C.lamp, 0));
+      path([pr(-0.15, 0.38, zl), pr(0.15, 0.38, zl), pr(0.62, -1, zl), pr(-0.62, -1, zl)]); ctx.fillStyle = g; ctx.fill(); ctx.restore();
+    }
+  }
+  for (let li = LAMPS.length - 1; li >= 0; li--) {
+    const zl = LAMPS[li], s = 1 / zl;
+    glow(0, 0.36 * s, 0.5 * s, 0.42 * s, C.lamp, 0.5);
+    wedge([0, 0.955, zl], [0, 0.5, zl], 0.008, C.ink);
+    const shade = [];
+    const n = 20;
+    for (let q = 0; q <= n; q++) { const t = q / n, Y = 0.5 - 0.12 * t, r = 0.035 + 0.135 * Math.pow(t, 1.8); shade.push([-r * s, Y * s]); }
+    for (let q = n; q >= 0; q--) { const t = q / n, Y = 0.5 - 0.12 * t, r = 0.035 + 0.135 * Math.pow(t, 1.8); shade.push([r * s, Y * s]); }
+    if (!vis(shade)) continue;
+    path(shade); ctx.fillStyle = C.umberDD; ctx.fill();
+    // highlight band on the dome
+    const hl = [];
+    for (let q = 0; q <= n; q++) { const t = q / n, Y = 0.5 - 0.12 * t, r = 0.035 + 0.135 * Math.pow(t, 1.8); hl.push([-r * s * 0.62, Y * s]); }
+    for (let q = n; q >= 0; q--) { const t = q / n, Y = 0.5 - 0.12 * t, r = 0.035 + 0.135 * Math.pow(t, 1.8); hl.push([-r * s * 0.3, Y * s]); }
+    path(hl); ctx.fillStyle = rgba(C.sepiaL, 0.55); ctx.fill();
+    path(shade); ctx.lineWidth = 0.005 * s; ctx.strokeStyle = C.ink; ctx.stroke();
+    // the lit opening, seen from below
+    ctx.beginPath(); ctx.ellipse(0, 0.38 * s, 0.17 * s, 0.03 * s, 0, 0, TAU);
+    const g = ctx.createRadialGradient(0, 0.38 * s, 0, 0, 0.38 * s, 0.17 * s);
+    g.addColorStop(0, C.lampHot); g.addColorStop(0.6, C.lamp); g.addColorStop(1, '#d8a94f');
+    ctx.fillStyle = g; ctx.fill(); ctx.lineWidth = 0.004 * s; ctx.strokeStyle = C.ink; ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(0, 0.372 * s, 0.035 * s, 0.022 * s, 0, 0, TAU); ctx.fillStyle = '#fffaf0'; ctx.fill();
+  }
+}
+
+// A user's picture, made self-similar: the whole image again, inset at its own centre.
+function makeImageScene(img, f) {
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height, sq = Math.min(iw, ih);
+  return {
+    s: 1 / f, mean: '#777', name: 'image',
+    draw(ctx, ppu, win) {
+      ctx.save(); ctx.scale(1, -1);
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, (iw - sq) / 2, (ih - sq) / 2, sq, sq, -1, -1, 2, 2);
+      ctx.restore();
+      const ring = (a, b, style) => { ctx.beginPath(); ctx.rect(-b, -b, 2 * b, 2 * b); ctx.rect(-a, -a, 2 * a, 2 * a); ctx.fillStyle = style; ctx.fill('evenodd'); };
+      ring(f * 1.2, f * 1.32, 'rgba(20,14,8,0.35)');
+      ring(f, f * 1.2, C.paper);
+      ring(f * 1.2, f * 1.24, C.ink);
+      ring(f, f * 1.03, C.ink);
+    },
+  };
+}
+
+// Draw `scene` at `scale` about the origin, then its hole, recursively.
+function drawNest(ctx, scene, scale, ppu, win, depth) {
+  const lppu = ppu * scale, lwin = win / scale, h = 1 / scene.s;
+  ctx.save();
+  ctx.scale(scale, scale);
+  ctx.beginPath(); ctx.rect(-1, -1, 2, 2); ctx.clip();
+  if (lwin > h) scene.draw(ctx, lppu, Math.min(lwin, 1.5));
+  ctx.beginPath(); ctx.rect(-h, -h, 2 * h, 2 * h); ctx.clip();
+  if (lppu * h * 2 > 2 && depth < 14) drawNest(ctx, scene, h, lppu, lwin, depth + 1);
+  else { ctx.fillStyle = scene.mean; ctx.fill(); }
+  ctx.restore();
+}
+
+// =====================================================================
+// WebGL
+// =====================================================================
+const plate = document.getElementById('plate');
+const gl = plate.getContext('webgl2', { antialias: false, alpha: false });
+if (!gl) { document.getElementById('nogl').style.display = 'grid'; return; }
+
+const VS = `#version 300 es
+in vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }`;
+const FS = `#version 300 es
+precision highp float;
+precision highp sampler2DArray;
+uniform sampler2DArray uSrc;
+uniform vec2 uRes, uCenter, uAlpha, uShift, uCutRot;
+uniform float uUnit, uL, uLnM, uN, uTexR, uCut, uGrid;
+uniform vec3 uMean, uInk, uLamp, uDim;
+uniform vec4 uPanel;
+uniform vec3 uPView;
+out vec4 outColor;
+const float PI = 3.14159265358979, TAU = 6.28318530717959;
+vec2 cmul(vec2 a, vec2 b){ return vec2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x); }
+
+vec3 layerSample(float lv, float xt, float th, float dlog){
+  float r = exp(xt);
+  vec2 z = r * vec2(cos(th), sin(th));
+  vec2 uv = vec2(0.5 + 0.5*z.x/uTexR, 0.5 - 0.5*z.y/uTexR);
+  float g = 0.5 * r * dlog / uTexR;          // conformal map: isotropic footprint
+  return textureGrad(uSrc, vec3(uv, lv), vec2(g, 0.0), vec2(0.0, g)).rgb;
+}
+// ws = point of the source in log coordinates (log radius, angle); dlog = log units per pixel
+vec3 source(vec2 ws, float dlog){
+  float x = ws.x - uL*floor(ws.x/uL) - uL;            // fold into one zoom period [-L, 0)
+  float lv = clamp(floor(-x/uLnM), 0.0, uN - 1.0);
+  float xt = x + lv*uLnM;                              // [-lnm, 0) inside layer lv
+  vec3 c = layerSample(lv, xt, ws.y, dlog);
+  float w = smoothstep(-uLnM, -0.62*uLnM, xt);         // near the inner edge, cross-fade into the next layer
+  if (w < 1.0) {
+    float lv2 = lv + 1.0; if (lv2 > uN - 0.5) lv2 = 0.0;
+    c = mix(layerSample(lv2, xt + uLnM, ws.y, dlog), c, w);
+  }
+  return mix(c, uMean, smoothstep(uL*0.05, uL*0.4, dlog));  // sub-pixel scales fade to the picture's mean
+}
+float aline(float d, float w){ return 1.0 - smoothstep(w - 0.6, w + 0.6, d); }
+vec3 grid(vec3 col, vec2 ws, float dlog, float fade){
+  float sx = uL*0.25, sy = TAU/16.0;
+  float dx = abs(fract(ws.x/sx + 0.5) - 0.5)*sx/dlog;
+  float dy = abs(fract(ws.y/sy + 0.5) - 0.5)*sy/dlog;
+  float dm = abs(fract(ws.x/uL + 0.5) - 0.5)*uL/dlog;
+  float a = max(aline(dx, 0.55), aline(dy, 0.55)) * 0.7;
+  float m = aline(dm, 1.3);
+  col = mix(col, uInk, max(a, m) * fade);
+  col = mix(col, uLamp, aline(dm, 0.45) * fade);
+  return col;
+}
+float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y)*p3.z); }
+
+void main(){
+  vec2 p = gl_FragCoord.xy;
+  vec3 col;
+  bool inPanel = uPanel.z > 0.0 && p.x >= uPanel.x && p.x < uPanel.x + uPanel.z && p.y >= uPanel.y && p.y < uPanel.y + uPanel.w;
+  if (!inPanel) {
+    vec2 d = p - uCenter;
+    float rho = max(length(d), 1e-3);
+    vec2 zr = cmul(d, uCutRot);
+    vec2 w = vec2(log(rho/uUnit), atan(zr.y, zr.x) + uCut - PI);
+    vec2 ws = cmul(uAlpha, w) + uShift;
+    float dlog = length(uAlpha)/rho;
+    col = source(ws, dlog);
+    if (uGrid > 0.0) col = grid(col, ws, dlog, uGrid * (1.0 - smoothstep(uL*0.03, uL*0.12, dlog)));
+  } else {
+    vec2 q = p - (uPanel.xy + 0.5*uPanel.zw);
+    vec2 w = uPView.xy + q*uPView.z;
+    vec2 ws = cmul(uAlpha, w) + uShift;
+    float dlog = length(uAlpha)*uPView.z;
+    col = source(ws, dlog);
+    float inside = step(uCut - TAU, w.y) * step(w.y, uCut);
+    col = mix(mix(col, uDim, 0.62), col, inside);
+    // the zoom-period frames of the source (a lattice: straight lines here)
+    float dm = abs(fract(ws.x/uL + 0.5) - 0.5)*uL/dlog;
+    // and the room's corner line: each parallelogram is one whole copy of the picture
+    float dc = abs(fract((ws.y + 0.75*PI)/TAU + 0.5) - 0.5)*TAU/dlog;
+    float tl = min(dm, dc);
+    col = mix(col, uInk, 0.8*aline(tl, 1.6));
+    col = mix(col, vec3(0.965, 0.933, 0.86), 0.9*aline(tl, 0.55));
+    if (uGrid > 0.0) col = grid(col, ws, dlog, uGrid);
+    // the two edges of the strip, which the spiral glues together
+    float e = min(abs(w.y - uCut), abs(w.y - (uCut - TAU)))/uPView.z;
+    col = mix(col, uInk, aline(e, 2.6));
+    col = mix(col, uLamp, aline(e, 1.1));
+    // panel border
+    vec2 bd = min(p - uPanel.xy, uPanel.xy + uPanel.zw - p);
+    col = mix(col, uInk, aline(min(bd.x, bd.y), 1.5));
+  }
+  // paper tooth
+  float n = hash12(floor(p));
+  col *= 0.975 + 0.04*n;
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, src) {
+  const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+  return sh;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const loc = gl.getAttribLocation(prog, 'p');
+gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+const U = {};
+for (const n of ['uSrc', 'uRes', 'uCenter', 'uAlpha', 'uShift', 'uCutRot', 'uUnit', 'uL', 'uLnM', 'uN', 'uTexR', 'uCut', 'uGrid', 'uMean', 'uInk', 'uLamp', 'uDim', 'uPanel', 'uPView']) U[n] = gl.getUniformLocation(prog, n);
+const hex3 = h => rgbOf(h).map(v => v / 255);
+gl.uniform1i(U.uSrc, 0);
+gl.uniform1f(U.uTexR, TEXR);
+gl.uniform1f(U.uCut, CUT);
+gl.uniform2f(U.uCutRot, Math.cos(-(CUT - Math.PI)), Math.sin(-(CUT - Math.PI)));
+gl.uniform3fv(U.uInk, hex3(C.ink));
+gl.uniform3fv(U.uLamp, hex3(C.lamp));
+gl.uniform3fv(U.uDim, hex3('#1a120b'));
+
+// ---------- build the source layers ----------
+const work = document.createElement('canvas'); work.width = work.height = S;
+const wctx = work.getContext('2d', { willReadFrequently: true });
+const tiny = document.createElement('canvas'); tiny.width = tiny.height = 64;
+const tctx = tiny.getContext('2d', { willReadFrequently: true });
+let src = null; // {tex, s, L, n, lnm, mean}
+
+function buildSource(scene) {
+  const s = scene.s, n = Math.max(1, Math.ceil(Math.log(s) / Math.LN2 - 1e-6)), m = Math.pow(s, 1 / n);
+  const tex = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
+  gl.texStorage3D(gl.TEXTURE_2D_ARRAY, Math.log2(S) + 1, gl.RGBA8, S, S, n);
+  let acc = [0, 0, 0], wsum = 0;
+  for (let k = 0; k < n; k++) {
+    const Z = Math.pow(m, k), ppu = (S / 2) / TEXR * Z;
+    wctx.setTransform(1, 0, 0, 1, 0, 0);
+    wctx.fillStyle = scene.mean; wctx.fillRect(0, 0, S, S);
+    wctx.setTransform(ppu, 0, 0, -ppu, S / 2, S / 2);
+    drawNest(wctx, scene, s, ppu, TEXR / Z, -1);
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, k, S, S, 1, gl.RGBA, gl.UNSIGNED_BYTE, work);
+    // mean over this layer's annulus, weighted by log-area (1/r^2)
+    tctx.clearRect(0, 0, 64, 64); tctx.drawImage(work, 0, 0, 64, 64);
+    const d = tctx.getImageData(0, 0, 64, 64).data;
+    for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+      const zx = ((x + 0.5) / 32 - 1) * TEXR, zy = ((y + 0.5) / 32 - 1) * TEXR, r = Math.hypot(zx, zy);
+      if (r < 1 / m || r >= 1) continue;
+      const wgt = 1 / (r * r), i = (y * 64 + x) * 4;
+      acc[0] += d[i] * wgt; acc[1] += d[i + 1] * wgt; acc[2] += d[i + 2] * wgt; wsum += wgt;
+    }
+  }
+  gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const mean = acc.map(v => v / wsum / 255);
+  scene.mean = `rgb(${mean.map(v => Math.round(v * 255)).join(',')})`;
+  if (src && src.tex) gl.deleteTexture(src.tex);
+  src = { tex, s, L: Math.log(s), n, lnm: Math.log(m), mean };
+  gl.uniform1f(U.uL, src.L); gl.uniform1f(U.uLnM, src.lnm); gl.uniform1f(U.uN, n);
+  gl.uniform3fv(U.uMean, mean);
+  updateFacts();
+  dirty = true;
+}
+
+// =====================================================================
+// State, layout, interaction
+// =====================================================================
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const $ = id => document.getElementById(id);
+const rail = $('rail');
+const st = {
+  twist: 1, strands: 1, speed: reduce ? 0 : 0.4, paused: reduce, phase: 0, zoom: 0,
+  unroll: false, grid: 0, gridT: 0, drag: [0, 0],
+};
+let dirty = true, dpr = 1, W = 0, H = 0;
+let centerBase = [0, 0], center = null, panel = null;
+
+function layout() {
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  W = innerWidth; H = innerHeight;
+  plate.width = Math.round(W * dpr); plate.height = Math.round(H * dpr);
+  const r = rail.getBoundingClientRect();
+  const phone = W <= 720, collapsed = rail.classList.contains('collapsed');
+  let x0 = 0, y0 = 0, x1 = W, y1 = H;
+  if (!collapsed) { if (phone) y1 = r.top - 4; else x0 = r.right + 4; }
+  else if (r.top < H / 2) y0 = phone ? r.bottom + 4 : 0;
+  panel = null;
+  if (st.unroll) {
+    if (phone) { const ph = Math.min(170, (y1 - y0) * 0.36); panel = [x0 + 8, y0 + 8, x1 - 8, y0 + 8 + ph]; y0 = panel[3]; }
+    else { const ph = Math.min(300, (y1 - y0) * 0.34); panel = [x0 + 12, y1 - 16 - ph, x1 - 16, y1 - 16]; y1 = panel[1]; }
+  }
+  centerBase = [(x0 + x1) / 2, (y0 + y1) / 2];
+  if (!center) center = centerBase.slice();
+  const cap = $('panelCap');
+  if (panel) Object.assign(cap.style, { display: 'block', left: panel[0] + 'px', top: panel[1] + 'px', width: (panel[2] - panel[0]) + 'px', height: (panel[3] - panel[1]) + 'px' });
+  else cap.style.display = 'none';
+  gl.viewport(0, 0, plate.width, plate.height);
+  dirty = true;
+}
+
+function alpha() { return [1, -st.twist * st.strands * (src ? src.L : Math.log(16)) / TAU]; }
+
+function updateTexts() {
+  if (!src) return;
+  const a = alpha();
+  $('twistVal').textContent = st.twist.toFixed(2);
+  $('strandVal').textContent = st.strands;
+  const k = -a[1];
+  const sTxt = src.s.toFixed(src.s % 1 ? 1 : 0);
+  $('alphaMath').innerHTML = `s = ${sTxt} &nbsp; α = 1 − ${k.toFixed(3)}i${st.twist > 0.995 ? ` = 1 − i·${st.strands > 1 ? st.strands : ''}ln s/2π` : ''}`;
+  const t = st.twist;
+  $('twistNote').textContent =
+    t < 0.005 ? 'No twist: the picture only nests inside itself, a stack of square frames. Nothing bends.' :
+    t > 0.995 ? (st.strands === 1 ? `One turn around the centre is exactly one zoom level (×${sTxt}), so the picture bends round and meets itself with no seam.` : `One turn around the centre is ${st.strands} zoom levels, so ${st.strands} copies wind in together, still seamless.`) :
+    'A turn now lands between zoom levels, so the picture cannot close: see the tear above the centre.';
+  const sp = st.speed;
+  $('speedVal').textContent = st.paused || Math.abs(sp) < 0.01 ? 'still' : (sp > 0 ? 'in · ' : 'out · ') + Math.round(1 / (Math.abs(sp) * 0.12)) + ' s per level';
+  $('pause').textContent = st.paused ? 'play' : 'pause';
+  $('pause').setAttribute('aria-pressed', String(st.paused));
+}
+function updateFacts() { updateTexts(); }
+
+// controls
+$('twist').addEventListener('input', e => { st.twist = +e.target.value; updateTexts(); dirty = true; });
+$('strands').addEventListener('input', e => { st.strands = +e.target.value; updateTexts(); dirty = true; });
+$('speed').addEventListener('input', e => { st.speed = +e.target.value; if (Math.abs(st.speed) > 0.01) st.paused = false; updateTexts(); });
+$('pause').addEventListener('click', () => { st.paused = !st.paused; updateTexts(); });
+$('vUnroll').addEventListener('click', e => { st.unroll = !st.unroll; e.currentTarget.setAttribute('aria-pressed', String(st.unroll)); layout(); });
+$('vGrid').addEventListener('click', e => { st.grid = st.grid ? 0 : 1; e.currentTarget.setAttribute('aria-pressed', String(!!st.grid)); dirty = true; });
+$('railToggle').addEventListener('click', e => {
+  const c = rail.classList.toggle('collapsed');
+  e.currentTarget.textContent = c ? 'show' : 'hide';
+  e.currentTarget.setAttribute('aria-expanded', String(!c));
+  layout();
+});
+
+// pictures
+const archive = { s: 16, mean: '#7c5b3c', name: 'archive', draw: drawArchive };
+let userImg = null;
+function setPicture(which) {
+  $('pArchive').classList.toggle('on', which === 'archive');
+  $('pArchive').setAttribute('aria-pressed', String(which === 'archive'));
+  $('pUpload').classList.toggle('on', which === 'image');
+  $('insetWrap').hidden = which !== 'image';
+  if (which === 'archive') buildSource(archive);
+  else buildSource(makeImageScene(userImg, +$('inset').value));
+}
+$('pArchive').addEventListener('click', () => setPicture('archive'));
+function loadFile(file) {
+  if (!file || !/^image\//.test(file.type)) return;
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => { userImg = img; setPicture('image'); };
+  img.src = url;
+}
+$('file').addEventListener('change', e => loadFile(e.target.files[0]));
+let insetTimer = 0;
+$('inset').addEventListener('input', e => {
+  $('insetVal').textContent = `${Math.round(+e.target.value * 100)}% · s = ${(1 / +e.target.value).toFixed(1)}`;
+  clearTimeout(insetTimer);
+  insetTimer = setTimeout(() => userImg && buildSource(makeImageScene(userImg, +e.target.value)), 60);
+});
+$('insetVal').textContent = `25% · s = 4.0`;
+const drop = $('drop');
+addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('on'); });
+addEventListener('dragleave', e => { if (!e.relatedTarget) drop.classList.remove('on'); });
+addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('on'); loadFile(e.dataTransfer.files[0]); });
+
+// pointer: drag moves the centre, pinch / wheel zooms
+const ptrs = new Map();
+let pinch0 = 0;
+plate.addEventListener('pointerdown', e => {
+  plate.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+  plate.classList.add('dragging');
+  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = Math.hypot(a[0] - b[0], a[1] - b[1]); }
+});
+plate.addEventListener('pointermove', e => {
+  if (!ptrs.has(e.pointerId)) return;
+  const prev = ptrs.get(e.pointerId), cur = [e.clientX, e.clientY];
+  ptrs.set(e.pointerId, cur);
+  if (ptrs.size === 1) { st.drag[0] += cur[0] - prev[0]; st.drag[1] += cur[1] - prev[1]; center[0] += cur[0] - prev[0]; center[1] += cur[1] - prev[1]; }
+  else if (ptrs.size === 2) {
+    const [a, b] = [...ptrs.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    if (pinch0 > 0 && d > 0) st.zoom -= Math.log(d / pinch0);
+    pinch0 = d;
+  }
+  dirty = true;
+});
+const endPtr = e => { ptrs.delete(e.pointerId); if (!ptrs.size) plate.classList.remove('dragging'); pinch0 = 0; };
+plate.addEventListener('pointerup', endPtr);
+plate.addEventListener('pointercancel', endPtr);
+plate.addEventListener('dblclick', () => { st.drag = [0, 0]; dirty = true; });
+plate.addEventListener('wheel', e => {
+  e.preventDefault();
+  const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+  st.zoom += e.deltaY * k * 0.0012;
+  dirty = true;
+}, { passive: false });
+addEventListener('resize', layout);
+
+// ---------- frame loop ----------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (!st.paused && Math.abs(st.speed) > 0.01) { st.phase = (st.phase + st.speed * 0.12 * dt) % 1; dirty = true; }
+  const tgt = [centerBase[0] + st.drag[0], centerBase[1] + st.drag[1]];
+  if (Math.hypot(tgt[0] - center[0], tgt[1] - center[1]) > 0.2) { center[0] += (tgt[0] - center[0]) * 0.15; center[1] += (tgt[1] - center[1]) * 0.15; dirty = true; }
+  if (dirty && src) {
+    dirty = false;
+    const a = alpha(), L = src.L;
+    let sx = a[0] * st.zoom - st.phase * L, sy = a[1] * st.zoom;
+    sx -= L * Math.floor(sx / L); sy -= TAU * Math.floor(sy / TAU);
+    gl.uniform2f(U.uRes, plate.width, plate.height);
+    gl.uniform2f(U.uCenter, center[0] * dpr, (H - center[1]) * dpr);
+    const unit = Math.min(W, H) * dpr / 2;
+    gl.uniform1f(U.uUnit, unit);
+    gl.uniform2f(U.uAlpha, a[0], a[1]);
+    gl.uniform2f(U.uShift, sx, sy);
+    gl.uniform1f(U.uGrid, st.grid);
+    if (panel) {
+      const pw = (panel[2] - panel[0]) * dpr, ph = (panel[3] - panel[1]) * dpr;
+      gl.uniform4f(U.uPanel, panel[0] * dpr, (H - panel[3]) * dpr, pw, ph);
+      const upp = TAU * 1.24 / ph;
+      const far = Math.max(Math.hypot(center[0], center[1]), Math.hypot(W - center[0], center[1]), Math.hypot(center[0], H - center[1]), Math.hypot(W - center[0], H - center[1])) * dpr;
+      const right = Math.log(far / unit) + 0.2;
+      gl.uniform3f(U.uPView, right - pw * upp / 2, CUT - Math.PI, upp);
+    } else gl.uniform4f(U.uPanel, 0, 0, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  requestAnimationFrame(frame);
+}
+
+if (reduce) { $('speed').value = 0; }
+layout();
+requestAnimationFrame(frame);
+setTimeout(() => {
+  const t0 = performance.now();
+  buildSource(archive);
+  window.__buildMs = Math.round(performance.now() - t0);
+}, 30);
+window.__droste = { drawArchive, drawNest, archive, st, setPicture, buildSource, makeImageScene, layout, get src() { return src; } };
+})();
+</script>
+</body>
+</html>
