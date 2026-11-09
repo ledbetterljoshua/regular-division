@@ -1,0 +1,84 @@
+/* Regular Division — shared studio chrome for every room.
+   Layout concept: each room is a full-bleed plate (canvas) with a slim ink
+   control rail; type is carved-condensed display + bookish serif + mono for math. */
+@import url('https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;700;800&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root {
+  color-scheme: dark;
+  --ink: #121315;          /* lithograph ink ground */
+  --ink-2: #1b1d21;        /* raised panel */
+  --ink-3: #262931;        /* hairlines, inputs */
+  --paper: #e8e4d8;        /* paper-white text */
+  --paper-dim: #a7a399;    /* secondary text */
+  --print: #c9a227;        /* default woodcut ochre; rooms override */
+  --display: 'Big Shoulders Display', 'Arial Narrow', Impact, sans-serif;
+  --serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+  --mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  --rail-w: 320px;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--ink); color: var(--paper); font: 16px/1.5 var(--serif); }
+
+/* Room shell: plate fills the screen, rail floats on the left (bottom sheet on phones). */
+.room { position: fixed; inset: 0; overflow: hidden; }
+.plate { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+.rail {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top, 0px));
+  left: max(16px, env(safe-area-inset-left, 0px));
+  bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  width: var(--rail-w);
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 18px 18px 16px;
+  background: color-mix(in oklab, var(--ink) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--ink-3);
+  overflow-y: auto;
+  z-index: 5;
+}
+.rail.collapsed > :not(.rail-head) { display: none; }
+.rail.collapsed { bottom: auto; }
+.rail-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.back { font: 500 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--paper-dim); text-decoration: none; }
+.back:hover, .back:focus-visible { color: var(--print); }
+.toggle { background: none; border: 0; color: var(--paper-dim); font: 500 12px var(--mono); cursor: pointer; padding: 4px; }
+
+.room-title { font: 800 44px/0.9 var(--display); letter-spacing: .01em; text-transform: uppercase; margin: 0; color: var(--paper); text-wrap: balance; }
+.room-title em { font-style: normal; color: var(--print); }
+.lede { font: 400 15px/1.5 var(--serif); color: var(--paper-dim); margin: 0; }
+.lede b { color: var(--paper); font-weight: 500; }
+
+.label { font: 500 11px/1.2 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--paper-dim); }
+.group { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--ink-3); }
+.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+.btn {
+  font: 500 12px/1 var(--mono); letter-spacing: .04em;
+  color: var(--paper); background: var(--ink-2);
+  border: 1px solid var(--ink-3); padding: 8px 10px; cursor: pointer;
+}
+.btn:hover { border-color: var(--paper-dim); }
+.btn:focus-visible, .toggle:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--print); outline-offset: 2px; }
+.btn[aria-pressed="true"], .btn.on { background: var(--print); color: var(--ink); border-color: var(--print); }
+
+input[type=range] { width: 100%; accent-color: var(--print); }
+select, input[type=text] { font: 13px var(--mono); color: var(--paper); background: var(--ink-2); border: 1px solid var(--ink-3); padding: 7px 8px; width: 100%; }
+.math { font: 400 12px/1.5 var(--mono); color: var(--paper-dim); }
+.note { font: italic 400 14px/1.5 var(--serif); color: var(--paper-dim); margin: 0; }
+
+/* Phone: rail becomes a bottom sheet over the lower ~45% of the screen. */
+@media (max-width: 720px) {
+  .rail {
+    top: auto; width: auto;
+    left: max(8px, env(safe-area-inset-left, 0px));
+    right: max(8px, env(safe-area-inset-right, 0px));
+    bottom: max(8px, env(safe-area-inset-bottom, 0px));
+    max-height: 46%;
+    padding: 14px;
+  }
+  .room-title { font-size: 34px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }

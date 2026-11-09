@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>The Seventeen</title>
+<link rel="stylesheet" href="../studio.css">
+<style>
+:root { --print: #c4693d; --print-2: #4f7a8a; }
+.groups { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
+.groups .btn { padding: 7px 0; text-align: center; font-size: 11px; }
+.groups .btn.fam { grid-column: 1 / -1; background: none; border: 0; padding: 6px 0 0; text-align: left; color: var(--paper-dim); cursor: default; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+.swatches { display: flex; gap: 6px; }
+.sw { width: 28px; height: 28px; border: 1px solid var(--ink-3); cursor: pointer; padding: 0; }
+.sw[aria-pressed="true"] { outline: 2px solid var(--paper); outline-offset: 2px; }
+.caption { position: absolute; right: max(16px, env(safe-area-inset-right, 0px)); bottom: max(16px, env(safe-area-inset-bottom, 0px)); text-align: right; pointer-events: none; z-index: 4; background: color-mix(in oklab, var(--ink) 86%, transparent); border: 1px solid var(--ink-3); padding: 12px 16px 10px; }
+.caption .g { font: 800 64px/0.85 var(--display); color: var(--paper); text-shadow: 0 2px 18px rgba(0,0,0,.6); }
+.caption .o { font: 500 13px/1.4 var(--mono); color: var(--paper); opacity: .85; text-shadow: 0 1px 8px rgba(0,0,0,.8); }
+.hint { position: absolute; left: 50%; top: max(18px, env(safe-area-inset-top, 0px)); transform: translateX(-50%); font: 500 12px var(--mono); letter-spacing: .08em; color: var(--paper); background: color-mix(in oklab, var(--ink) 80%, transparent); padding: 8px 12px; border: 1px solid var(--ink-3); pointer-events: none; z-index: 4; transition: opacity .6s; margin-left: calc(var(--rail-w) / 2); }
+@media (max-width: 720px) { .caption { top: max(14px, env(safe-area-inset-top, 0px)); bottom: auto; } .caption .g { font-size: 44px; } .hint { display: none; } }
+</style>
+</head>
+<body>
+<div class="room">
+  <canvas class="plate" id="plate" aria-label="Drawing surface: every stroke is repeated by the chosen symmetry group"></canvas>
+  <div class="caption" aria-live="polite"><div class="g" id="capG">p4g</div><div class="o" id="capO">4*2 · square lattice</div></div>
+  <div class="hint" id="hint">Draw anywhere. The group does the rest.</div>
+  <aside class="rail" id="rail">
+    <div class="rail-head"><a class="back" href="../index.html">← Studio</a>
+      <button class="toggle" id="railToggle" aria-expanded="true">hide</button></div>
+    <h1 class="room-title">The <em>Seventeen</em></h1>
+    <p class="lede">After his 1936 visit to the Alhambra, Escher studied George Pólya's 1924 paper showing that a repeating flat pattern can have <b>exactly seventeen</b> kinds of symmetry. He sketched his way through them by hand. Here, one stroke becomes all of them at once.</p>
+    <div class="group">
+      <span class="label">Symmetry group</span>
+      <div class="groups" id="groups"></div>
+    </div>
+    <div class="group">
+      <span class="label">Ink</span>
+      <div class="row">
+        <div class="swatches" id="swatches"></div>
+        <label class="label" for="width" style="margin-left:auto">Gouge</label>
+      </div>
+      <input type="range" id="width" min="1" max="18" value="5">
+      <div class="row">
+        <button class="btn" id="undo">Undo</button>
+        <button class="btn" id="clear">Clear</button>
+        <button class="btn" id="tour" aria-pressed="true">Tour all 17</button>
+        <button class="btn" id="cell" aria-pressed="false">Show cell</button>
+      </div>
+    </div>
+    <div class="group">
+      <span class="label">Reading the name</span>
+      <p class="math" id="explain"></p>
+    </div>
+  </aside>
+</div>
+<script>
+(() => {
+const S3 = Math.sqrt(3) / 2;
+// Ops in fractional coordinates (International Tables), as [a,b,c,d,e,f]: x' = a x + b y + e, y' = c x + d y + f
+const I = [1,0,0,1,0,0];
+const neg = [-1,0,0,-1,0,0];
+const op = (a,b,c,d,e=0,f=0) => [a,b,c,d,e,f];
+const p3ops = [I, op(0,-1,1,-1), op(-1,1,-1,0)];
+const p6ops = [...p3ops, neg, op(0,1,-1,1), op(1,-1,1,0)];
+const m3a = [op(0,-1,-1,0), op(-1,1,0,1), op(1,0,1,-1)];     // p3m1 mirrors
+const m3b = [op(0,1,1,0), op(1,-1,0,-1), op(-1,0,-1,1)];     // p31m mirrors
+const L = {
+  oblique: [[1,0],[0.28,0.86]],
+  rect:    [[1,0],[0,0.72]],
+  crect:   [[1,0],[0,1.25]],
+  square:  [[1,0],[0,1]],
+  hex:     [[1,0],[-0.5,S3]],
+};
+const G = [
+  { fam: 'Oblique' },
+  { n:'p1',  orb:'o',    lat:'oblique', ops:[I], say:'Translations only. The motif slides; nothing turns or flips.' },
+  { n:'p2',  orb:'2222', lat:'oblique', ops:[I,neg], say:'Half turns about four kinds of point. Every motif has an upside-down twin.' },
+  { fam: 'Rectangular' },
+  { n:'pm',  orb:'**',   lat:'rect', ops:[I, op(-1,0,0,1)], say:'Parallel mirrors. Every motif faces its reflection across a line.' },
+  { n:'pg',  orb:'xx',   lat:'rect', ops:[I, op(-1,0,0,1,0,.5)], say:'Glide reflections: reflect, then slide half a step. Footprints in snow.' },
+  { n:'pmm', orb:'*2222',lat:'rect', ops:[I, neg, op(-1,0,0,1), op(1,0,0,-1)], say:'Two perpendicular families of mirrors meeting at right angles.' },
+  { n:'pmg', orb:'22*',  lat:'rect', ops:[I, neg, op(-1,0,0,1,.5,0), op(1,0,0,-1,.5,0)], say:'Mirrors one way, glides the other, half turns between.' },
+  { n:'pgg', orb:'22x',  lat:'rect', ops:[I, neg, op(-1,0,0,1,.5,.5), op(1,0,0,-1,.5,.5)], say:'Glides in both directions and half turns, but no mirrors at all.' },
+  { n:'cm',  orb:'*x',   lat:'crect', ops:[I, op(-1,0,0,1)], c:true, say:'Mirrors with glides between them, on a centred lattice.' },
+  { n:'cmm', orb:'2*22', lat:'crect', ops:[I, neg, op(-1,0,0,1), op(1,0,0,-1)], c:true, say:'Perpendicular mirrors on a centred lattice, with extra half turns.' },
+  { fam: 'Square' },
+  { n:'p4',  orb:'442',  lat:'square', ops:[I, neg, op(0,-1,1,0), op(0,1,-1,0)], say:'Quarter turns. Four motifs pinwheel around each centre.' },
+  { n:'p4m', orb:'*442', lat:'square', ops:[I, neg, op(0,-1,1,0), op(0,1,-1,0), op(-1,0,0,1), op(1,0,0,-1), op(0,1,1,0), op(0,-1,-1,0)], say:'Quarter turns sitting on mirrors. The square kaleidoscope.' },
+  { n:'p4g', orb:'4*2',  lat:'square', ops:[I, neg, op(0,-1,1,0), op(0,1,-1,0), op(-1,0,0,1,.5,.5), op(1,0,0,-1,.5,.5), op(0,1,1,0,.5,.5), op(0,-1,-1,0,.5,.5)], say:'Quarter turns that sit between mirrors, not on them. A woven pinwheel.' },
+  { fam: 'Hexagonal' },
+  { n:'p3',  orb:'333',  lat:'hex', ops:p3ops, say:'Third turns about three kinds of point. No mirrors, so motifs can swirl.' },
+  { n:'p3m1',orb:'*333', lat:'hex', ops:[...p3ops, ...m3a], say:'Third turns, every centre on a mirror. A triangular kaleidoscope.' },
+  { n:'p31m',orb:'3*3',  lat:'hex', ops:[...p3ops, ...m3b], say:'Third turns, some centres on mirrors and some off them.' },
+  { n:'p6',  orb:'632',  lat:'hex', ops:p6ops, say:'Sixth turns. The richest group with no mirror in it.' },
+  { n:'p6m', orb:'*632', lat:'hex', ops:[...p6ops, ...m3a, ...m3b], say:'Every symmetry a flat repeating pattern can have. Snowflake order.' },
+];
+const groups = G.filter(g => g.n);
+const latName = { oblique:'oblique lattice', rect:'rectangular lattice', crect:'centred rectangular lattice', square:'square lattice', hex:'hexagonal lattice' };
+
+const INKS = [
+  { c: getVar('--paper'), name: 'paper' },
+  { c: getVar('--print'), name: 'vermilion' },
+  { c: getVar('--print-2'), name: 'slate' },
+  { c: '#c9a227', name: 'ochre' },
+];
+function getVar(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim() || '#ccc'; }
+
+const cv = document.getElementById('plate'), ctx = cv.getContext('2d');
+let W, H, dpr, scale;
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let gi = groups.findIndex(g => g.n === 'p4g');
+let ink = 0, width = 5, showCell = false;
+let strokes = []; // {pts:[[fx,fy] in model units], ink, w}
+let current = null;
+let touring = true, tourT = 0, lastSwitch = 0;
+
+function size() {
+  dpr = Math.min(2, devicePixelRatio || 1);
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  rescale();
+}
+function rescale() {
+  const g = groups[gi], n = g.ops.length * (g.c ? 2 : 1);
+  const B = L[g.lat], area = Math.abs(B[0][0] * B[1][1] - B[0][1] * B[1][0]);
+  // keep the fundamental domain a constant size on screen, whatever the group
+  scale = Math.max(90, Math.min(W, H) / 4.2) * Math.sqrt(n / 4 / area) * 0.85;
+  dirty = true;
+}
+let dirty = true;
+addEventListener('resize', size);
+
+function railOffset() {
+  const rail = document.getElementById('rail');
+  if (rail.classList.contains('collapsed') || innerWidth <= 720) return [0, innerWidth <= 720 && !rail.classList.contains('collapsed') ? -rail.offsetHeight / 2 : 0];
+  return [(rail.offsetWidth + 16) / 2, 0];
+}
+// model (cartesian, cell units) <-> screen
+function center() { const [ox, oy] = railOffset(); return [W / 2 + ox, H / 2 + oy]; }
+function toModel(sx, sy) { const [cx, cy] = center(); return [(sx - cx) / scale, -(sy - cy) / scale]; }
+
+function basis() { return L[groups[gi].lat]; }
+function cartToFrac(p, B) { // solve p = x*a + y*b
+  const [a, b] = B, det = a[0] * b[1] - a[1] * b[0];
+  return [(p[0] * b[1] - p[1] * b[0]) / det, (a[0] * p[1] - a[1] * p[0]) / det];
+}
+function fracToCart(f, B) { return [f[0] * B[0][0] + f[1] * B[1][0], f[0] * B[0][1] + f[1] * B[1][1]]; }
+
+// Each stroke stores model points; build the images under every op as Path2D in model units.
+function buildPaths(s, g) {
+  const B = L[g.lat];
+  const fr = s.pts.map(p => cartToFrac(p, B));
+  const out = [];
+  const cen = g.c ? [[0, 0], [.5, .5]] : [[0, 0]];
+  for (const o of g.ops) for (const c of cen) {
+    const path = new Path2D();
+    let q;
+    fr.forEach((f, k) => {
+      const x = o[0] * f[0] + o[1] * f[1] + o[4] + c[0];
+      const y = o[2] * f[0] + o[3] * f[1] + o[5] + c[1];
+      q = fracToCart([x, y], B);
+      k ? path.lineTo(q[0], q[1]) : path.moveTo(q[0], q[1]);
+    });
+    if (fr.length === 1) path.lineTo(q[0] + 1e-4, q[1]);
+    out.push(path);
+  }
+  return out;
+}
+function pathsFor(s) {
+  const g = groups[gi];
+  if (s._g !== g.n || s._n !== s.pts.length) { s._paths = buildPaths(s, g); s._g = g.n; s._n = s.pts.length; }
+  return s._paths;
+}
+
+function draw() {
+  const g = groups[gi], B = L[g.lat];
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = getVar('--ink'); ctx.fillRect(0, 0, W, H);
+  const [cx, cy] = center();
+  // translation range needed to cover the screen
+  const R = Math.hypot(W, H) / scale + 2;
+  const ext = Math.ceil(R / Math.min(Math.hypot(...B[0]), Math.abs(B[0][0] * B[1][1] - B[0][1] * B[1][0]) / Math.hypot(...B[0]))) + 1;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const all = strokes.concat(current ? [current] : []);
+  const pathSets = all.map(s => [s, pathsFor(s)]);
+  for (let i = -ext; i <= ext; i++) for (let j = -ext; j <= ext; j++) {
+    const t = fracToCart([i, j], B);
+    const sx = cx + t[0] * scale, sy = cy - t[1] * scale;
+    if (sx < -scale * 2.5 || sx > W + scale * 2.5 || sy < -scale * 2.5 || sy > H + scale * 2.5) continue;
+    ctx.setTransform(dpr * scale, 0, 0, -dpr * scale, dpr * sx, dpr * sy);
+    for (const [s, ps] of pathSets) {
+      ctx.strokeStyle = INKS[s.ink].c;
+      ctx.lineWidth = s.w / scale;
+      for (const p of ps) ctx.stroke(p);
+    }
+    if (showCell) {
+      ctx.strokeStyle = 'rgba(232,228,216,.22)'; ctx.lineWidth = 1 / scale;
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(B[0][0], B[0][1]); ctx.lineTo(B[0][0] + B[1][0], B[0][1] + B[1][1]); ctx.lineTo(B[1][0], B[1][1]); ctx.closePath(); ctx.stroke();
+    }
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+// ---------- the opening drawing: an original long-tailed creature, drawn by a ghost hand ----------
+function seed() {
+  const P = [];
+  // body: a curling tadpole-bird with a crest, in model units near the origin
+  const body = [];
+  for (let k = 0; k <= 60; k++) {
+    const u = k / 60, a = -0.3 + u * 4.2, r = 0.05 + 0.32 * (1 - u) * (1 - u) + 0.02;
+    body.push([0.18 + Math.cos(a) * r * 0.9, 0.12 + Math.sin(a) * r * 0.75]);
+  }
+  P.push({ pts: body, ink: 1, w: 7 });
+  P.push({ pts: [[0.42, 0.18], [0.5, 0.3], [0.47, 0.36], [0.56, 0.4], [0.52, 0.47]], ink: 0, w: 4 });   // crest
+  P.push({ pts: [[0.36, 0.2]], ink: 0, w: 9 });                                                              // eye
+  P.push({ pts: [[0.05, 0.05], [0.0, -0.08], [0.06, -0.18], [-0.02, -0.26]], ink: 2, w: 5 });             // fin
+  const wave = []; for (let k = 0; k <= 30; k++) { const u = k / 30; wave.push([-0.35 + u * 0.3, 0.32 + 0.05 * Math.sin(u * 12)]); }
+  P.push({ pts: wave, ink: 3, w: 3 });
+  // shrink into a generic spot inside the fundamental domain
+  const k = 0.42, ox = 0.16, oy = 0.09;
+  for (const s of P) { s.pts = s.pts.map(([x, y]) => [x * k + ox, y * k + oy]); s.w = Math.max(2, s.w * 0.75); }
+  return P;
+}
+let ghost = null; // {queue, si, pi}
+function startGhost() { ghost = { queue: seed(), si: 0, pi: 0 }; strokes = []; }
+function stepGhost(n) {
+  if (!ghost) return;
+  for (let k = 0; k < n && ghost; k++) {
+    const s = ghost.queue[ghost.si];
+    if (!s) { ghost = null; break; }
+    if (ghost.pi === 0) strokes.push({ pts: [], ink: s.ink, w: s.w });
+    strokes[strokes.length - 1].pts.push(s.pts[ghost.pi]);
+    ghost.pi++;
+    if (ghost.pi >= s.pts.length) { ghost.si++; ghost.pi = 0; }
+  }
+  dirty = true;
+}
+
+// ---------- UI ----------
+const gEl = document.getElementById('groups');
+G.forEach(g => {
+  const b = document.createElement('button');
+  b.className = 'btn' + (g.fam ? ' fam' : '');
+  b.textContent = g.fam || g.n;
+  if (g.fam) { b.disabled = true; b.tabIndex = -1; }
+  else { b.title = g.orb; b.onclick = () => { setTour(false); setGroup(groups.indexOf(g)); }; }
+  gEl.appendChild(b);
+});
+function setGroup(i) {
+  gi = i; const g = groups[gi]; if (W) rescale();
+  [...gEl.children].forEach(b => b.setAttribute('aria-pressed', b.textContent === g.n ? 'true' : 'false'));
+  document.getElementById('capG').textContent = g.n;
+  document.getElementById('capO').textContent = `${g.orb} · ${latName[g.lat]}`;
+  document.getElementById('explain').textContent = `${g.n} (orbifold ${g.orb}): ${g.say}`;
+  dirty = true;
+}
+const swEl = document.getElementById('swatches');
+INKS.forEach((k, i) => {
+  const b = document.createElement('button');
+  b.className = 'sw'; b.style.background = k.c; b.setAttribute('aria-label', k.name + ' ink');
+  b.setAttribute('aria-pressed', i === ink ? 'true' : 'false');
+  b.onclick = () => { ink = i; [...swEl.children].forEach((c, j) => c.setAttribute('aria-pressed', j === i ? 'true' : 'false')); };
+  swEl.appendChild(b);
+});
+document.getElementById('width').oninput = e => width = +e.target.value;
+document.getElementById('undo').onclick = () => { ghost = null; strokes.pop(); dirty = true; };
+document.getElementById('clear').onclick = () => { ghost = null; strokes = []; dirty = true; };
+const tourBtn = document.getElementById('tour');
+function setTour(on) { touring = on; tourBtn.setAttribute('aria-pressed', on ? 'true' : 'false'); lastSwitch = performance.now(); }
+tourBtn.onclick = () => setTour(!touring);
+const cellBtn = document.getElementById('cell');
+cellBtn.onclick = () => { showCell = !showCell; cellBtn.setAttribute('aria-pressed', showCell); dirty = true; };
+const rail = document.getElementById('rail'), rt = document.getElementById('railToggle');
+rt.onclick = () => { const c = rail.classList.toggle('collapsed'); rt.textContent = c ? 'show' : 'hide'; rt.setAttribute('aria-expanded', !c); dirty = true; };
+
+cv.addEventListener('pointerdown', e => {
+  cv.setPointerCapture(e.pointerId);
+  ghost = null; setTour(false);
+  document.getElementById('hint').style.opacity = 0;
+  current = { pts: [toModel(e.offsetX, e.offsetY)], ink, w: width };
+  dirty = true;
+});
+cv.addEventListener('pointermove', e => {
+  if (!current) return;
+  const p = toModel(e.offsetX, e.offsetY), q = current.pts[current.pts.length - 1];
+  if (Math.hypot(p[0] - q[0], p[1] - q[1]) * scale > 2) { current.pts.push(p); dirty = true; }
+});
+const end = () => { if (current) { strokes.push(current); current = null; dirty = true; } };
+cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
+
+size(); setGroup(gi);
+if (reduce) { strokes = seed(); } else startGhost();
+function loop(now) {
+  if (ghost) stepGhost(2);
+  if (touring && !reduce && !ghost && now - lastSwitch > 3200) { lastSwitch = now; setGroup((gi + 1) % groups.length); }
+  if (dirty) { draw(); dirty = false; }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+window.__setGroup = n => setGroup(groups.findIndex(g => g.n === n));
+window.__stopGhost = () => { ghost = null; strokes = seed(); setTour(false); dirty = true; };
+})();
+</script>
+</body>
+</html>
