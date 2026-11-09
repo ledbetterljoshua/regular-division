@@ -1,0 +1,902 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Endless Metamorphosis</title>
+<link rel="stylesheet" href="../studio.css">
+<style>
+  :root { --print: #c4922f; --slate: #5a7591; }
+  .plate { cursor: grab; }
+  .plate.dragging { cursor: grabbing; }
+  .plate:focus-visible { outline: 2px solid var(--print); outline-offset: -6px; }
+  .hidden { display: none !important; }
+  .kf-btns .btn { flex: 1 1 auto; }
+  .seg { display: flex; gap: 0; }
+  .seg .btn { flex: 1; margin-left: -1px; }
+  .seg .btn:first-child { margin-left: 0; }
+  #editor { width: 100%; max-width: 300px; margin: 0 auto; aspect-ratio: 1 / 1; display: block; touch-action: none; border: 1px solid var(--ink-3); background: #0e0f11; cursor: crosshair; }
+  #editor:focus-visible { outline: 2px solid var(--print); outline-offset: 2px; }
+  .slider-row { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }
+  .slider-row .math { white-space: nowrap; }
+  .ask-row { display: flex; gap: 6px; }
+  .ask-row input { flex: 1; min-width: 0; }
+  .ask-row .btn { flex: none; }
+  #askStatus { min-height: 1.5em; }
+  #askNotes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  #askNotes li { font: italic 400 14px/1.4 var(--serif); color: var(--paper-dim); }
+  #askNotes li b { font: 500 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--print); font-style: normal; margin-right: 6px; }
+  .legend-key { display: flex; gap: 12px; align-items: center; }
+  .chip { width: 12px; height: 12px; border: 1px solid #000; display: inline-block; vertical-align: -1px; margin-right: 4px; }
+</style>
+</head>
+<body>
+<div class="room">
+  <canvas class="plate" id="plate" tabindex="0" aria-label="An endless woodcut strip of tessellated creatures that change shape from one to the next. Drag or use arrow keys to scrub."></canvas>
+  <aside class="rail" id="rail">
+    <div class="rail-head"><a class="back" href="../index.html">← Studio</a>
+      <button class="toggle" id="railToggle" aria-expanded="true">hide</button></div>
+    <h1 class="room-title">Endless <em>Metamorphosis</em></h1>
+    <p class="lede">His woodcut <i>Metamorphosis II</i> (1939–40) is a strip about four metres long in which one tessellation turns into the next. Cut in wood, it has to end. Here every edge is <b>a curve shared by the two tiles that meet on it</b>, so the curves can drift with position and time and the strip never opens a gap. It runs forever.</p>
+
+    <div class="group">
+      <span class="label">The strip</span>
+      <div class="row">
+        <button class="btn" id="playBtn" aria-pressed="true">Drifting</button>
+        <span class="math">drag it, or ← → to scrub</span>
+      </div>
+    </div>
+
+    <div class="group">
+      <span class="label">Keyframe creatures</span>
+      <div class="row kf-btns" id="kfBtns"></div>
+      <button class="btn hidden" id="restoreBtn">Restore the original five</button>
+    </div>
+
+    <div class="group hidden" id="askGroup">
+      <span class="label">Ask Claude for a sequence</span>
+      <div class="ask-row">
+        <input type="text" id="askInput" value="a heron becoming a teapot" aria-label="Describe a metamorphosis">
+        <button class="btn" id="askBtn">Ask Claude</button>
+      </div>
+      <span class="math" id="askStatus"></span>
+      <ul id="askNotes"></ul>
+    </div>
+
+    <div class="group">
+      <span class="label" id="edLabel">Edit the fish</span>
+      <canvas id="editor" tabindex="0" aria-label="Tile editor: drag the handles to reshape the edges of this keyframe"></canvas>
+      <p class="note">Filled handles sit on the tile's own three edges; hollow ones are the same edges arriving from the neighbours. Drag either. The neighbours move with it because they read the very same curve, so no drag can open a gap.</p>
+      <span class="label">Symmetry</span>
+      <div class="seg" id="symBtns" role="group" aria-label="Symmetry">
+        <button class="btn" data-sym="p1" title="translation only">p1</button>
+        <button class="btn" data-sym="p2" title="half-turns at edge midpoints">p2</button>
+        <button class="btn" data-sym="p3" title="three-fold turns at the corners">p3</button>
+        <button class="btn" data-sym="p6" title="three-fold and half-turns">p6</button>
+      </div>
+      <div class="slider-row">
+        <span class="math">hexagon</span>
+        <input type="range" id="latSlider" min="0" max="1" step="0.01" aria-label="Lattice: hexagon to square">
+        <span class="math">square</span>
+      </div>
+      <label class="label" for="texSel">Interior cut</label>
+      <select id="texSel">
+        <option value="plain">plain</option>
+        <option value="grain">wood grain</option>
+        <option value="scales">scales</option>
+        <option value="feathers">feathers</option>
+        <option value="fur">fur</option>
+        <option value="veins">veins</option>
+      </select>
+    </div>
+
+    <div class="group">
+      <span class="label">How it holds</span>
+      <p class="math">Tile (i,j) owns three edges. Each edge is a spline through 3 control points (t along the chord, y across it), computed once from the morph value at its midpoint. The opposite three edges are the neighbours' copies, read in reverse. Interpolating the control points along x changes the creature without ever changing the topology.</p>
+    </div>
+  </aside>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+// ---------- constants ----------
+const HR = 1.866;            // lattice row height, in units of h (half tile width)
+const SEG = 8;               // lattice columns per keyframe
+const HOLD = 0.26;           // fraction of each segment that holds the keyframe still
+const AUTO = 0.55;           // auto drift, h-units per second
+const C = { ink: '#16171a', ochre: '#c4922f', slate: '#5a7591', paper: '#ebe4d1', ground: '#121315', dim: '#a7a399' };
+const FILLS = [C.ochre, C.slate, C.paper];
+const TEXTURES = ['plain', 'grain', 'scales', 'feathers', 'fur', 'veins'];
+const SYMS = ['p1', 'p2', 'p3', 'p6'];
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Keyframe schema (internal): edges[c] = three [t, y] control points for edge class c.
+//   class 0 "right":     right side, top -> bottom; +y bulges out to the right (left side gets the dent)
+//   class 1 "upperLeft": left corner -> top corner; +y bulges out up-left (lower-right gets the dent)
+//   class 2 "lowerLeft": bottom corner -> left corner; +y bulges out down-left (upper-right gets the dent)
+// eye/fin/mark are in tile-local units of h, x right, y down, origin at the lattice point.
+const ORIGINALS = [
+  { name: 'Cell', note: 'The plain grid, before anything is cut into it.', lattice: 0, sym: 'p1',
+    edges: [[[.25, 0], [.5, 0], [.75, 0]], [[.25, 0], [.5, 0], [.75, 0]], [[.25, 0], [.5, 0], [.75, 0]]],
+    eye: [.3, -.1, 0], fin: [[0, 0], [0, 0], [0, 0]], mark: [[0, 0], [0, 0], [0, 0]], texture: 'grain', angle: 0 },
+  { name: 'Fish', note: 'Snout pushes right; the dent it leaves is the next fish\u2019s tail.', lattice: .05, sym: 'p1',
+    edges: [[[.24, .18], [.5, .34], [.76, .15]], [[.18, -.16], [.6, .34], [.85, .12]], [[.3, .24], [.55, .08], [.84, -.16]]],
+    eye: [.55, -.15, .12], fin: [[.2, -.46], [.06, 0], [.2, .46]], mark: [[-.8, .05], [-.3, .1], [.1, .05]], texture: 'scales', angle: 0 },
+  { name: 'Bird', note: 'The dorsal fin lifts into a wing; the snout sharpens to a beak.', lattice: .5, sym: 'p1',
+    edges: [[[.12, .32], [.3, -.06], [.7, .1]], [[.22, .18], [.34, .42], [.62, .18]], [[.25, -.08], [.6, .32], [.8, .18]]],
+    eye: [.6, -.55, .1], fin: [[-.05, .25], [-.3, -.2], [-.7, -.62]], mark: [[-.55, .45], [-.3, .6], [0, .65]], texture: 'feathers', angle: -25 },
+  { name: 'Hound', note: 'Wing folds into an ear; the grid goes square.', lattice: 1, sym: 'p1',
+    edges: [[[.12, .4], [.3, .06], [.66, -.06]], [[.15, .36], [.3, .12], [.65, -.16]], [[.2, -.06], [.32, -.42], [.46, -.08]]],
+    eye: [.5, -.55, .09], fin: [[.18, -.62], [.3, -.42], [.46, -.36]], mark: [[-.75, .2], [-.45, .5], [-.1, .6]], texture: 'fur', angle: 20 },
+  { name: 'Seed', note: 'Every edge the same S, turned about each corner: a winged seed.', lattice: 0, sym: 'p6',
+    edges: [[[.25, .25], [.5, 0], [.75, -.25]], [[.25, .25], [.5, 0], [.75, -.25]], [[.25, .25], [.5, 0], [.75, -.25]]],
+    eye: [0, 0, .07], fin: [[-.7, .4], [0, 0], [.7, -.4]], mark: [[0, 0], [0, 0], [0, 0]], texture: 'veins', angle: -30 },
+];
+const clone = (o) => JSON.parse(JSON.stringify(o));
+let KF = clone(ORIGINALS);
+let fromClaude = false;
+let sel = 1;
+
+// ---------- keyframe interpolation ----------
+let flats = [];
+function flatten(k) {
+  const a = [k.lattice];
+  for (let c = 0; c < 3; c++) for (const p of k.edges[c]) a.push(p[0], p[1]);
+  a.push(k.eye[0], k.eye[1], k.eye[2]);
+  for (const p of k.fin) a.push(p[0], p[1]);
+  for (const p of k.mark) a.push(p[0], p[1]);
+  a.push(k.angle);
+  return a;
+}
+function refreshFlats() { flats = KF.map(flatten); }
+refreshFlats();
+const NF = flats[0].length;
+const smooth = (x) => x * x * (3 - 2 * x);
+
+// Morph value at world x (units of h). Returns mixed numeric params + texture pair.
+function stripParams(x) {
+  const n = KF.length;
+  let s = x / (2 * SEG) / 1;
+  s = ((s % n) + n) % n;
+  const k = Math.floor(s), f = s - k, k2 = (k + 1) % n;
+  const m = f < HOLD ? 0 : smooth((f - HOLD) / (1 - HOLD));
+  const A = flats[k], B = flats[k2], arr = new Float64Array(NF);
+  for (let q = 0; q < NF; q++) arr[q] = A[q] + (B[q] - A[q]) * m;
+  return { arr, ta: KF[k].texture, tb: KF[k2].texture, m };
+}
+function fixedParams(k) {
+  const arr = Float64Array.from(flatten(k));
+  return () => ({ arr, ta: k.texture, tb: k.texture, m: 0 });
+}
+
+// ---------- geometry ----------
+// Tile (i,j) sits at T = (2i - j, j*HR). Vertices: A(i,j) = T + (1, vy), B(i,j) = T + (1, -vy).
+// Canonical edges run A -> B: class0 A(p,q)->B(p,q); class1 A(p,q)->B(p,q-1); class2 A(p,q)->B(p-1,q-1).
+function centripetal(pts, steps, out) {
+  const n = pts.length;
+  const P = [[2 * pts[0][0] - pts[1][0], 2 * pts[0][1] - pts[1][1]], ...pts,
+    [2 * pts[n - 1][0] - pts[n - 2][0], 2 * pts[n - 1][1] - pts[n - 2][1]]];
+  out.push(pts[0][0], pts[0][1]);
+  const knot = (a, b) => Math.max(1e-4, Math.sqrt(Math.hypot(b[0] - a[0], b[1] - a[1])));
+  for (let s = 1; s < P.length - 2; s++) {
+    const p0 = P[s - 1], p1 = P[s], p2 = P[s + 1], p3 = P[s + 2];
+    const t0 = 0, t1 = t0 + knot(p0, p1), t2 = t1 + knot(p1, p2), t3 = t2 + knot(p2, p3);
+    for (let k = 1; k <= steps; k++) {
+      const t = t1 + (t2 - t1) * k / steps;
+      const L = (pa, pb, ta, tb) => { const u = (t - ta) / (tb - ta); return [pa[0] + (pb[0] - pa[0]) * u, pa[1] + (pb[1] - pa[1]) * u]; };
+      const A1 = L(p0, p1, t0, t1), A2 = L(p1, p2, t1, t2), A3 = L(p2, p3, t2, t3);
+      const B1 = L(A1, A2, t0, t2), B2 = L(A2, A3, t1, t3);
+      const Cc = L(B1, B2, t1, t2);
+      out.push(Cc[0], Cc[1]);
+    }
+  }
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+function makeWorld(P, breath, time) {
+  const vyCache = new Map(), edgeCache = new Map();
+  function vy(i, j) {
+    const key = i + ',' + j;
+    let v = vyCache.get(key);
+    if (v === undefined) { v = -HR * (1 / 3 + P(2 * i - j).arr[0] / 6); vyCache.set(key, v); }
+    return v;
+  }
+  const A = (i, j) => [2 * i - j + 1, j * HR + vy(i, j)];
+  const B = (i, j) => [2 * i - j + 1, j * HR - vy(i, j)];
+  function edge(c, p, q) {
+    const key = c + ',' + p + ',' + q;
+    let e = edgeCache.get(key);
+    if (e) return e;
+    const a = A(p, q), b = c === 0 ? B(p, q) : c === 1 ? B(p, q - 1) : B(p - 1, q - 1);
+    const dx = b[0] - a[0], dy = b[1] - a[1], nx = dy, ny = -dx;
+    const mx = (a[0] + b[0]) / 2;
+    const arr = P(mx).arr;
+    const pts = [a];
+    for (let k = 0; k < 3; k++) {
+      const t = clamp(arr[1 + c * 6 + k * 2], .08, .92);
+      let y = arr[2 + c * 6 + k * 2];
+      if (breath) y += .032 * Math.sin(time * .7 + mx * .37 + c * 2.1 + k * 1.7);
+      y = clamp(y, -.44, .44);
+      pts.push([a[0] + t * dx + y * nx, a[1] + t * dy + y * ny]);
+    }
+    pts.push(b);
+    const out = [];
+    centripetal(pts, 7, out);
+    e = Float64Array.from(out);
+    edgeCache.set(key, e);
+    return e;
+  }
+  function tile(i, j) {
+    const spec = [[0, i, j, 1], [1, i, j + 1, -1], [2, i, j + 1, 1], [0, i - 1, j, -1], [1, i - 1, j, 1], [2, i, j, -1]];
+    const poly = [];
+    for (const [c, p, q, dir] of spec) {
+      const e = edge(c, p, q), n = e.length / 2;
+      if (dir > 0) for (let k = 0; k < n - 1; k++) poly.push(e[2 * k], e[2 * k + 1]);
+      else for (let k = n - 1; k > 0; k--) poly.push(e[2 * k], e[2 * k + 1]);
+    }
+    const T = [2 * i - j, j * HR];
+    return { i, j, T, poly, prm: P(T[0]), col: (((i + j) % 3) + 3) % 3 };
+  }
+  return { tile, edge, edges: edgeCache, A, B };
+}
+
+function polyPath(poly) {
+  const p = new Path2D();
+  p.moveTo(poly[0], poly[1]);
+  for (let k = 2; k < poly.length; k += 2) p.lineTo(poly[k], poly[k + 1]);
+  p.closePath();
+  return p;
+}
+function inPoly(poly, x, y) {
+  let inside = false;
+  for (let a = 0, b = poly.length - 2; a < poly.length; b = a, a += 2) {
+    const xa = poly[a], ya = poly[a + 1], xb = poly[b], yb = poly[b + 1];
+    if ((ya > y) !== (yb > y) && x < (xb - xa) * (y - ya) / (yb - ya) + xa) inside = !inside;
+  }
+  return inside;
+}
+
+// ---------- interior cutting ----------
+const hash = (a, b) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); };
+function texture(ctx, kind, px) {
+  ctx.beginPath();
+  if (kind === 'grain') {
+    for (let y = -1.7; y <= 1.7; y += .17) {
+      for (let x = -1.8; x <= 1.8; x += .1) {
+        const yy = y + .035 * Math.sin(x * 3.1 + y * 7) + .02 * Math.sin(x * 9 + y * 3);
+        x === -1.8 ? ctx.moveTo(x, yy) : ctx.lineTo(x, yy);
+      }
+    }
+  } else if (kind === 'scales') {
+    let r = 0;
+    for (let y = -1.6; y <= 1.6; y += .26, r++) {
+      const off = r % 2 ? .16 : 0;
+      for (let x = -1.8; x <= 1.8; x += .32) { ctx.moveTo(x + off, y - .16); ctx.arc(x + off, y, .16, -Math.PI / 2, Math.PI / 2, true); }
+    }
+  } else if (kind === 'feathers') {
+    let r = 0;
+    for (let y = -1.6; y <= 1.6; y += .22, r++) {
+      const off = r % 2 ? .15 : 0;
+      for (let x = -1.8; x <= 1.8; x += .3) {
+        ctx.moveTo(x + off + .2, y - .1); ctx.quadraticCurveTo(x + off + .02, y - .02, x + off, y);
+        ctx.quadraticCurveTo(x + off + .02, y + .02, x + off + .2, y + .1);
+      }
+    }
+  } else if (kind === 'fur') {
+    let gi = 0;
+    for (let y = -1.6; y <= 1.6; y += .17) {
+      let gj = 0;
+      for (let x = -1.8; x <= 1.8; x += .17) {
+        const jx = (hash(gi, gj) - .5) * .1, jy = (hash(gj, gi) - .5) * .1, a = .5 + (hash(gi + 9, gj) - .5) * .5, l = .12 + hash(gi, gj + 3) * .06;
+        ctx.moveTo(x + jx, y + jy); ctx.lineTo(x + jx + Math.cos(a) * l, y + jy + Math.sin(a) * l);
+        gj++;
+      }
+      gi++;
+    }
+  } else if (kind === 'veins') {
+    for (let x = -1.4; x <= 1.4; x += .26) {
+      ctx.moveTo(x, 0); ctx.quadraticCurveTo(x + .18, -.25, x + .42, -.62);
+      ctx.moveTo(x, 0); ctx.quadraticCurveTo(x + .18, .25, x + .42, .62);
+    }
+    for (let x = -1.4; x <= 1.4; x += .13) { ctx.moveTo(x, -.85); ctx.lineTo(x + .05, -1.4); ctx.moveTo(x, .85); ctx.lineTo(x + .05, 1.4); }
+  }
+  ctx.stroke();
+}
+// each texture is cut once per scale into a sprite, then stamped (rotated) into every tile
+const SPR = 1.8, sprites = new Map();
+function sprite(kind, sc) {
+  const key = kind + '|' + Math.round(sc * 4);
+  let c = sprites.get(key);
+  if (c) return c;
+  if (sprites.size > 40) sprites.clear();
+  c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(2 * SPR * sc);
+  const g = c.getContext('2d');
+  g.setTransform(sc, 0, 0, sc, SPR * sc, SPR * sc);
+  g.strokeStyle = C.ink; g.lineWidth = .95 * dpr / sc; g.lineCap = 'round';
+  texture(g, kind);
+  sprites.set(key, c);
+  return c;
+}
+function curveThrough(ctx, a, b, c) {
+  ctx.moveTo(a[0], a[1]);
+  ctx.quadraticCurveTo(2 * b[0] - (a[0] + c[0]) / 2, 2 * b[1] - (a[1] + c[1]) / 2, c[0], c[1]);
+}
+
+function paintTile(ctx, t, px, opts) {
+  const { arr, ta, tb, m } = t.prm;
+  const path = t.path;
+  ctx.fillStyle = FILLS[t.col];
+  ctx.fill(path);
+  ctx.save();
+  ctx.clip(path);
+  ctx.translate(t.T[0], t.T[1]);
+  // texture, crossfaded between the two keyframes' cuts
+  ctx.save();
+  ctx.rotate(arr[34] * Math.PI / 180);
+  const base = t.col === 2 ? .4 : .48, sc = dpr / px;
+  const stamp = (kind, a) => { if (kind === 'plain' || a < .01) return; ctx.globalAlpha = a; ctx.drawImage(sprite(kind, sc), -SPR, -SPR, 2 * SPR, 2 * SPR); };
+  if (ta === tb) stamp(ta, base);
+  else { stamp(ta, base * (1 - m)); stamp(tb, base * m); }
+  ctx.restore();
+  // fin stroke
+  const fin = [[arr[22], arr[23]], [arr[24], arr[25]], [arr[26], arr[27]]];
+  const fa = clamp((Math.hypot(fin[2][0] - fin[0][0], fin[2][1] - fin[0][1]) - .2) / .35, 0, 1);
+  if (fa > 0) {
+    ctx.globalAlpha = fa;
+    ctx.beginPath(); curveThrough(ctx, ...fin);
+    ctx.strokeStyle = C.ink; ctx.lineWidth = 2.1 * px; ctx.lineCap = 'round'; ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  // mark: a row of gouged dots
+  const mk = [[arr[28], arr[29]], [arr[30], arr[31]], [arr[32], arr[33]]];
+  const ma = clamp((Math.hypot(mk[2][0] - mk[0][0], mk[2][1] - mk[0][1]) - .2) / .35, 0, 1);
+  if (ma > 0) {
+    ctx.fillStyle = C.ink; ctx.globalAlpha = ma;
+    const cx = 2 * mk[1][0] - (mk[0][0] + mk[2][0]) / 2, cy = 2 * mk[1][1] - (mk[0][1] + mk[2][1]) / 2;
+    for (let s = 0; s <= 1.0001; s += 1 / 7) {
+      const u = 1 - s, x = u * u * mk[0][0] + 2 * u * s * cx + s * s * mk[2][0], y = u * u * mk[0][1] + 2 * u * s * cy + s * s * mk[2][1];
+      ctx.beginPath(); ctx.arc(x, y, 1.5 * px, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+  // eye: kept inside the tile by walking it toward the centre until it fits
+  const r = arr[21], ea = clamp((r - .02) / .05, 0, 1);
+  if (ea > 0) {
+    ctx.globalAlpha = ea;
+    let ex = t.T[0] + arr[19], ey = t.T[1] + arr[20];
+    for (let s = 1; s > .1; s -= .1) {
+      const x = t.T[0] + arr[19] * s, y = t.T[1] + arr[20] * s, rr = r * 1.5;
+      if (inPoly(t.poly, x, y) && inPoly(t.poly, x + rr, y) && inPoly(t.poly, x - rr, y) && inPoly(t.poly, x, y + rr) && inPoly(t.poly, x, y - rr)) { ex = x; ey = y; break; }
+    }
+    ctx.beginPath(); ctx.arc(ex, ey, r, 0, Math.PI * 2);
+    ctx.fillStyle = C.paper; ctx.fill();
+    ctx.lineWidth = 1.6 * px; ctx.strokeStyle = C.ink; ctx.stroke();
+    ctx.beginPath(); ctx.arc(ex + r * .18, ey, r * .52, 0, Math.PI * 2); ctx.fillStyle = C.ink; ctx.fill();
+    ctx.beginPath(); ctx.arc(ex + r * .02, ey - r * .2, r * .16, 0, Math.PI * 2); ctx.fillStyle = C.paper; ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function strokeEdges(ctx, edges, lw) {
+  ctx.beginPath();
+  for (const e of edges.values()) {
+    ctx.moveTo(e[0], e[1]);
+    for (let k = 2; k < e.length; k += 2) ctx.lineTo(e[k], e[k + 1]);
+  }
+  ctx.strokeStyle = C.ink; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.stroke();
+}
+
+// paper grain, generated once
+const grain = (() => {
+  const g = document.createElement('canvas'); g.width = g.height = 256;
+  const gx = g.getContext('2d'), img = gx.createImageData(256, 256);
+  for (let k = 0; k < img.data.length; k += 4) {
+    const fib = Math.sin((k >> 2) % 256 * .9) * .5 + .5;
+    const n = Math.random();
+    const v = 255 - (n < .06 ? 70 * Math.random() : 18 * n) - 6 * fib;
+    img.data[k] = img.data[k + 1] = img.data[k + 2] = v; img.data[k + 3] = 255;
+  }
+  gx.putImageData(img, 0, 0);
+  return g;
+})();
+
+// ---------- plate ----------
+const plate = document.getElementById('plate'), pctx = plate.getContext('2d');
+let W = 0, H = 0, dpr = 1, L = {};
+let grainPat = null;
+function layout() {
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  W = innerWidth; H = innerHeight;
+  plate.width = Math.round(W * dpr); plate.height = Math.round(H * dpr);
+  const phone = W <= 720;
+  let bandTop, bandH, rows;
+  if (phone) {
+    const sheetTop = H - 8 - H * .46;
+    bandTop = 22; bandH = Math.max(180, sheetTop - bandTop - 64); rows = 4;
+  } else {
+    bandH = clamp(H * .56, 300, 600); bandTop = Math.max(40, (H - bandH) / 2 - 28); rows = 4.4;
+  }
+  const u = bandH / (rows * HR);
+  const railRight = phone ? 0 : (rail.classList.contains('collapsed') ? 0 : rail.getBoundingClientRect().right);
+  L = { phone, bandTop, bandH, u, oy: bandTop + bandH / 2, railRight, focusX: railRight + (W - railRight) / 2 };
+  grainPat = pctx.createPattern(grain, 'repeat');
+  sizeEditor();
+}
+
+let scroll = null;   // world x at the left of the screen (units of h); set on first layout
+let vel = reduced ? 0 : AUTO, playing = !reduced, target = null, time = 0;
+let dragging = false, sheetMode = false;
+
+function drawPlate() {
+  const ctx = pctx, { u, oy, bandTop, bandH } = L;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = C.ground; ctx.fillRect(0, 0, W, H);
+
+  // build visible tiles
+  const P = stripParams;
+  const world = makeWorld(P, !reduced, time);
+  const j0 = Math.floor((bandTop - oy) / (u * HR)) - 1, j1 = Math.ceil((bandTop + bandH - oy) / (u * HR)) + 1;
+  const x0 = scroll - 2.5, x1 = scroll + W / u + 2.5;
+  const tiles = [];
+  for (let j = j0; j <= j1; j++) {
+    for (let i = Math.floor((x0 + j) / 2); i <= Math.ceil((x1 + j) / 2); i++) {
+      const t = world.tile(i, j); t.path = polyPath(t.poly); tiles.push(t);
+    }
+  }
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, bandTop, W, bandH); ctx.clip();
+  ctx.setTransform(dpr * u, 0, 0, dpr * u, -scroll * u * dpr, oy * dpr);
+  const px = 1 / u;
+  for (const t of tiles) paintTile(ctx, t, px);
+  // paper grain over the print, moving with the paper
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.globalCompositeOperation = 'multiply';
+  grainPat.setTransform(new DOMMatrix([1, 0, 0, 1, -(scroll * u) % 256, 0]));
+  ctx.fillStyle = grainPat; ctx.fillRect(0, bandTop, W, bandH);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.setTransform(dpr * u, 0, 0, dpr * u, -scroll * u * dpr, oy * dpr);
+  strokeEdges(ctx, world.edges, Math.max(2, u * .05) * px);
+  ctx.restore();
+
+  // the strip's printed border
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.strokeStyle = C.paper; ctx.globalAlpha = .9; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, bandTop - 6.5); ctx.lineTo(W, bandTop - 6.5); ctx.moveTo(0, bandTop + bandH + 6.5); ctx.lineTo(W, bandTop + bandH + 6.5); ctx.stroke();
+  ctx.globalAlpha = 1;
+  if (!L.phone) {
+    ctx.font = '500 11px "IBM Plex Mono", ui-monospace, monospace'; ctx.fillStyle = C.dim; ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'right';
+    ctx.fillText(`COLUMN ${Math.floor((scroll + L.focusX / u) / 2)}   /   ${KF.length} KEYFRAMES, LOOP OF ${SEG * KF.length} COLUMNS   /   NO LAST TILE`, W - 24, bandTop - 18);
+    ctx.textAlign = 'left';
+  }
+  drawLegend(ctx);
+}
+
+const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'];
+function drawLegend(ctx) {
+  const { u, bandTop, bandH, phone } = L, n = KF.length, period = 2 * SEG;
+  const y0 = bandTop + bandH + 6.5;
+  if (phone) {
+    let st = ((scroll + L.focusX / u) / period) % n; st = (st + n) % n;
+    const k = Math.floor(st), f = st - k, k2 = (k + 1) % n;
+    const lab = (q) => `${ROMAN[q] || q + 1} \u00b7 ${KF[q].name.toUpperCase()}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.font = '500 11px "IBM Plex Mono", ui-monospace, monospace'; ctx.fillStyle = C.paper;
+    const moving = f > HOLD + .04;
+    ctx.fillText(moving ? `${lab(k)}  \u2192  ${lab(k2)}` : lab(k), W / 2, y0 + 12);
+    const nk = moving && f > HOLD + (1 - HOLD) / 2 ? k2 : k;
+    if (KF[nk].note) { ctx.fillStyle = C.dim; ctx.font = 'italic 400 13px Newsreader, Georgia, serif'; wrapText(ctx, KF[nk].note, W / 2, y0 + 30, W - 40, 16, 2); }
+    ctx.textAlign = 'left';
+    return;
+  }
+  const kk0 = Math.floor(scroll / period) - 1, kk1 = Math.ceil((scroll + W / u) / period) + 1;
+  ctx.textBaseline = 'top';
+  for (let kk = kk0; kk <= kk1; kk++) {
+    const k = ((kk % n) + n) % n;
+    const wx = (kk + HOLD / 2) * period, sx = (wx - scroll) * u;
+    if (sx < -200 || sx > W + 200) continue;
+    ctx.strokeStyle = C.paper; ctx.globalAlpha = .55; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(sx, y0); ctx.lineTo(sx, y0 + 10); ctx.stroke();
+    // span of the transition, as a hairline
+    const ex = ((kk + 1) * period - scroll) * u, hx = ((kk + HOLD) * period - scroll) * u;
+    ctx.globalAlpha = .28; ctx.beginPath(); ctx.moveTo(hx, y0 + 5); ctx.lineTo(ex, y0 + 5); ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = k === sel ? C.ochre : C.paper;
+    ctx.font = `500 ${phone ? 11 : 12}px "IBM Plex Mono", ui-monospace, monospace`;
+    ctx.textAlign = 'center';
+    const maxW = Math.min(period * u * .9, phone ? 220 : 340);
+    const tx = clamp(sx, L.railRight + maxW / 2 + 10, W - maxW / 2 - 10);
+    if (Math.abs(tx - sx) > maxW / 2) continue;
+    ctx.fillText(`${ROMAN[k] || k + 1} · ${KF[k].name.toUpperCase()}`, tx, y0 + 15);
+    if (KF[k].note) {
+      ctx.fillStyle = C.dim;
+      ctx.font = `italic 400 ${phone ? 12 : 14}px Newsreader, Georgia, serif`;
+      wrapText(ctx, KF[k].note, tx, y0 + 33, maxW, phone ? 15 : 18, 2);
+    }
+  }
+  ctx.textAlign = 'left';
+}
+function wrapText(ctx, text, x, y, maxW, lh, maxLines) {
+  const words = text.split(/\s+/); let line = '', lines = 0;
+  for (let w = 0; w < words.length; w++) {
+    const test = line ? line + ' ' + words[w] : words[w];
+    if (ctx.measureText(test).width > maxW && line) {
+      if (lines === maxLines - 1) { ctx.fillText(line + '…', x, y + lines * lh); return; }
+      ctx.fillText(line, x, y + lines * lh); lines++; line = words[w];
+    } else line = test;
+  }
+  if (line) ctx.fillText(line, x, y + lines * lh);
+}
+
+// ---------- editor ----------
+const ed = document.getElementById('editor'), ectx = ed.getContext('2d');
+let EW = 0, EU = 0;
+function sizeEditor() {
+  const r = ed.getBoundingClientRect();
+  EW = r.width || 282;
+  ed.width = Math.round(EW * dpr); ed.height = Math.round(EW * dpr);
+  EU = EW / 4.8;
+}
+const GHOST = [[-2, 0], [1, HR], [1, -HR]];     // reversed copy of each class inside tile (0,0)
+const FWD = [[0, 0], [-1, 0], [0, 1]];            // canonical edge key (p,q) of each class's forward edge
+function handlePos(world, c, k) {
+  const [p, q] = FWD[c];
+  const a = world.A(p, q), b = c === 0 ? world.B(p, q) : c === 1 ? world.B(p, q - 1) : world.B(p - 1, q - 1);
+  const kf = KF[sel], t = kf.edges[c][k][0], y = kf.edges[c][k][1];
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  return { a, d: [dx, dy], x: a[0] + t * dx + y * dy, y: a[1] + t * dy - y * dx };
+}
+let edWorld = null;
+function drawEditor() {
+  if (!EW) return;
+  const ctx = ectx, kf = KF[sel];
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#0e0f11'; ctx.fillRect(0, 0, EW, EW);
+  const P = fixedParams(kf);
+  const world = makeWorld(P, false, 0); edWorld = world;
+  const tiles = [];
+  for (let j = -2; j <= 2; j++) for (let i = Math.floor((-3 + j) / 2); i <= Math.ceil((3 + j) / 2); i++) { const t = world.tile(i, j); t.path = polyPath(t.poly); tiles.push(t); }
+  const cx = EW / 2, cy = EW / 2;
+  ctx.save();
+  ctx.setTransform(dpr * EU, 0, 0, dpr * EU, cx * dpr, cy * dpr);
+  const px = 1 / EU;
+  for (const t of tiles) paintTile(ctx, t, px);
+  strokeEdges(ctx, world.edges, 1.6 * px);
+  // veil the neighbours so the centre tile reads as "the" tile
+  const center = tiles.find((t) => t.i === 0 && t.j === 0);
+  const veil = new Path2D(); veil.rect(-10, -10, 20, 20); veil.addPath(center.path);
+  ctx.fillStyle = 'rgba(14,15,17,.52)'; ctx.fill(veil, 'evenodd');
+  ctx.lineWidth = 2.6 * px; ctx.strokeStyle = C.ink; ctx.stroke(center.path);
+  // chords + handles
+  ctx.setLineDash([3 * px, 3 * px]); ctx.lineWidth = 1 * px; ctx.strokeStyle = 'rgba(232,228,216,.45)';
+  for (let c = 0; c < 3; c++) {
+    const h = handlePos(world, c, 0), g = GHOST[c];
+    ctx.beginPath(); ctx.moveTo(h.a[0], h.a[1]); ctx.lineTo(h.a[0] + h.d[0], h.a[1] + h.d[1]);
+    ctx.moveTo(h.a[0] + g[0], h.a[1] + g[1]); ctx.lineTo(h.a[0] + h.d[0] + g[0], h.a[1] + h.d[1] + g[1]); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  for (let c = 0; c < 3; c++) for (let k = 0; k < 3; k++) {
+    const h = handlePos(world, c, k), g = GHOST[c];
+    const pinned = (kf.sym === 'p2' || kf.sym === 'p6') && k === 1;
+    const active = drag && drag.c === c && drag.k === k;
+    ctx.beginPath(); ctx.arc(h.x + g[0], h.y + g[1], 5 * px, 0, Math.PI * 2);
+    ctx.lineWidth = 1.6 * px; ctx.strokeStyle = C.ochre; ctx.fillStyle = '#0e0f11'; ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(h.x, h.y, (active ? 7.5 : 6) * px, 0, Math.PI * 2);
+    ctx.fillStyle = pinned ? C.dim : C.ochre; ctx.fill(); ctx.lineWidth = 1.6 * px; ctx.strokeStyle = C.ink; ctx.stroke();
+  }
+  // eye handle
+  if (kf.eye[2] > .025) {
+    ctx.beginPath(); ctx.rect(kf.eye[0] - 5 * px, kf.eye[1] - 5 * px, 10 * px, 10 * px);
+    ctx.lineWidth = 1.5 * px; ctx.strokeStyle = C.paper; ctx.setLineDash([2 * px, 2 * px]); ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
+
+function applySym(kf, c, k) {
+  const sym = kf.sym;
+  const mirror = (p) => [1 - p[0], -p[1]];
+  if (sym === 'p2' || sym === 'p6') {
+    for (let cc = 0; cc < 3; cc++) {
+      const e = kf.edges[cc];
+      if (cc === c && k === 2) e[0] = mirror(e[2]); else e[2] = mirror(e[0]);
+      e[1] = [.5, 0];
+    }
+  }
+  if (sym === 'p3' || sym === 'p6') {
+    const src = kf.edges[c];
+    for (let cc = 0; cc < 3; cc++) if (cc !== c) kf.edges[cc] = clone(src);
+  }
+}
+
+let drag = null;
+function edPoint(ev) {
+  const r = ed.getBoundingClientRect();
+  return [(ev.clientX - r.left - EW / 2) / EU, (ev.clientY - r.top - EW / 2) / EU];
+}
+ed.addEventListener('pointerdown', (ev) => {
+  if (!edWorld) return;
+  const [x, y] = edPoint(ev), kf = KF[sel];
+  let best = null, bd = 16 / EU;
+  for (let c = 0; c < 3; c++) for (let k = 0; k < 3; k++) {
+    if ((kf.sym === 'p2' || kf.sym === 'p6') && k === 1) continue;
+    const h = handlePos(edWorld, c, k);
+    for (const g of [[0, 0], GHOST[c]]) {
+      const d = Math.hypot(h.x + g[0] - x, h.y + g[1] - y);
+      if (d < bd) { bd = d; best = { c, k, g }; }
+    }
+  }
+  if (!best && kf.eye[2] > .025 && Math.hypot(kf.eye[0] - x, kf.eye[1] - y) < 14 / EU) best = { eye: true };
+  if (best) { drag = best; try { ed.setPointerCapture(ev.pointerId); } catch (e) {} ev.preventDefault(); }
+});
+ed.addEventListener('pointermove', (ev) => {
+  if (!drag) return;
+  const [x, y] = edPoint(ev), kf = KF[sel];
+  if (drag.eye) { kf.eye[0] = clamp(x, -.95, .95); kf.eye[1] = clamp(y, -1.1, 1.1); }
+  else {
+    const h = handlePos(edWorld, drag.c, drag.k);
+    const rx = x - drag.g[0] - h.a[0], ry = y - drag.g[1] - h.a[1];
+    const dd = h.d[0] * h.d[0] + h.d[1] * h.d[1];
+    const t = (rx * h.d[0] + ry * h.d[1]) / dd, yy = (rx * h.d[1] - ry * h.d[0]) / dd;
+    kf.edges[drag.c][drag.k] = [clamp(t, .08, .92), clamp(yy, -.42, .42)];
+    applySym(kf, drag.c, drag.k);
+  }
+  refreshFlats(); drawEditor();
+});
+const endDrag = () => { if (drag) { drag = null; drawEditor(); } };
+ed.addEventListener('pointerup', endDrag);
+ed.addEventListener('pointercancel', endDrag);
+
+// ---------- rail controls ----------
+const rail = document.getElementById('rail');
+const railToggle = document.getElementById('railToggle');
+railToggle.addEventListener('click', () => {
+  const c = rail.classList.toggle('collapsed');
+  railToggle.setAttribute('aria-expanded', String(!c));
+  railToggle.textContent = c ? 'show' : 'hide';
+  layout(); drawEditor();
+});
+const playBtn = document.getElementById('playBtn');
+function setPlaying(p) { playing = p; playBtn.setAttribute('aria-pressed', String(p)); playBtn.textContent = p ? 'Drifting' : 'Paused'; }
+setPlaying(playing);
+playBtn.addEventListener('click', () => setPlaying(!playing));
+
+const kfBtns = document.getElementById('kfBtns');
+function buildKfButtons() {
+  kfBtns.textContent = '';
+  KF.forEach((k, idx) => {
+    const b = document.createElement('button');
+    b.className = 'btn'; b.textContent = k.name; b.setAttribute('aria-pressed', String(idx === sel));
+    b.addEventListener('click', () => selectKf(idx, true));
+    kfBtns.appendChild(b);
+  });
+}
+const symBtns = [...document.querySelectorAll('#symBtns .btn')];
+const latSlider = document.getElementById('latSlider'), texSel = document.getElementById('texSel');
+function syncControls() {
+  const k = KF[sel];
+  document.getElementById('edLabel').textContent = 'Edit the ' + k.name.toLowerCase();
+  [...kfBtns.children].forEach((b, i) => b.setAttribute('aria-pressed', String(i === sel)));
+  symBtns.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.sym === k.sym)));
+  latSlider.value = k.lattice; texSel.value = k.texture;
+}
+function selectKf(idx, travel) {
+  sel = idx; syncControls(); drawEditor();
+  if (travel) {
+    const period = 2 * SEG, n = KF.length, focusWorld = scroll + L.focusX / L.u;
+    const cur = Math.floor((focusWorld / period) / n) * n;
+    let best = null;
+    for (const base of [cur - n, cur, cur + n]) {
+      const wx = (base + idx + HOLD / 2) * period, s = wx - L.focusX / L.u;
+      if (best === null || Math.abs(s - scroll) < Math.abs(best - scroll)) best = s;
+    }
+    target = best;
+  }
+}
+symBtns.forEach((b) => b.addEventListener('click', () => {
+  const k = KF[sel]; k.sym = b.dataset.sym; applySym(k, 0, 0); refreshFlats(); syncControls(); drawEditor();
+}));
+latSlider.addEventListener('input', () => { KF[sel].lattice = +latSlider.value; refreshFlats(); drawEditor(); });
+texSel.addEventListener('change', () => { KF[sel].texture = texSel.value; drawEditor(); });
+
+// ---------- strip interaction ----------
+let lastX = 0, lastT = 0, dragVel = 0;
+plate.addEventListener('pointerdown', (ev) => {
+  dragging = true; target = null; lastX = ev.clientX; lastT = performance.now(); dragVel = 0;
+  try { plate.setPointerCapture(ev.pointerId); } catch (e) {} plate.classList.add('dragging');
+});
+plate.addEventListener('pointermove', (ev) => {
+  if (!dragging) return;
+  const now = performance.now(), dx = ev.clientX - lastX;
+  scroll -= dx / L.u;
+  const dt = Math.max(1, now - lastT) / 1000;
+  dragVel = .7 * dragVel + .3 * (-dx / L.u / dt);
+  lastX = ev.clientX; lastT = now;
+});
+const endPlate = () => { if (!dragging) return; dragging = false; vel = clamp(dragVel, -40, 40); plate.classList.remove('dragging'); };
+plate.addEventListener('pointerup', endPlate);
+plate.addEventListener('pointercancel', endPlate);
+plate.addEventListener('keydown', (ev) => {
+  if (ev.key === 'ArrowRight') { target = (target ?? scroll) + 2; ev.preventDefault(); }
+  if (ev.key === 'ArrowLeft') { target = (target ?? scroll) - 2; ev.preventDefault(); }
+  if (ev.key === ' ') { setPlaying(!playing); ev.preventDefault(); }
+});
+
+// ---------- applying a sequence (Claude's, or any JSON in the schema) ----------
+const num = (v, lo, hi, d) => { const x = Number(v); return Number.isFinite(x) ? clamp(x, lo, hi) : d; };
+const pt = (p, lo, hi, d) => Array.isArray(p) ? [num(p[0], lo, hi, d[0]), num(p[1], lo, hi, d[1])] : d.slice();
+function normalizeKeyframe(raw, idx) {
+  if (!raw || typeof raw !== 'object') return null;
+  const base = ORIGINALS[0];
+  const e = raw.edges || {};
+  const names = [['right', 'r', 0], ['upperLeft', 'upper_left', 1], ['lowerLeft', 'lower_left', 2]];
+  const edges = names.map(([a, b, c]) => {
+    const src = Array.isArray(e) ? e[c] : (e[a] || e[b]);
+    const d = base.edges[c];
+    return [0, 1, 2].map((k) => {
+      const p = Array.isArray(src) ? src[k] : null;
+      return Array.isArray(p) ? [num(p[0], .08, .92, d[k][0]), num(p[1], -.42, .42, 0)] : d[k].slice();
+    });
+  });
+  const eye = Array.isArray(raw.eye) ? [num(raw.eye[0], -.9, .9, 0), num(raw.eye[1], -1, 1, 0), num(raw.eye[2], 0, .2, 0)] : [0, 0, 0];
+  const stroke = (s) => [0, 1, 2].map((k) => pt(Array.isArray(s) ? s[k] : null, -1, 1, [0, 0]));
+  const kf = {
+    name: String(raw.name || `Form ${idx + 1}`).replace(/\s+/g, ' ').trim().slice(0, 22),
+    note: String(raw.note || '').replace(/\s+/g, ' ').trim().slice(0, 140),
+    lattice: num(raw.lattice, 0, 1, 0),
+    sym: SYMS.includes(raw.symmetry) ? raw.symmetry : (SYMS.includes(raw.sym) ? raw.sym : 'p1'),
+    edges, eye, fin: stroke(raw.fin), mark: stroke(raw.mark),
+    texture: TEXTURES.includes(raw.texture) ? raw.texture : 'grain',
+    angle: num(raw.textureAngle ?? raw.angle, -90, 90, 0),
+  };
+  applySym(kf, 0, 0);
+  return kf;
+}
+function applyKeyframes(data) {
+  const list = Array.isArray(data) ? data : (data && Array.isArray(data.keyframes) ? data.keyframes : null);
+  if (!list) throw new Error('no keyframes array');
+  const kfs = list.slice(0, 6).map(normalizeKeyframe).filter(Boolean);
+  if (!kfs.length) throw new Error('no usable keyframes');
+  KF = kfs; fromClaude = true; refreshFlats();
+  buildKfButtons(); restoreBtn.classList.remove('hidden');
+  const notes = document.getElementById('askNotes'); notes.textContent = '';
+  for (const k of KF) {
+    const li = document.createElement('li'), b = document.createElement('b');
+    b.textContent = k.name; li.append(b, document.createTextNode(k.note));
+    notes.appendChild(li);
+  }
+  selectKf(0, true);
+  return kfs.length;
+}
+window.applyKeyframes = applyKeyframes;
+// for screenshots and console play: jump to keyframe k (fractional allowed), pause
+window.metamorphosis = {
+  applyKeyframes,
+  show(k) { setPlaying(false); vel = 0; target = null; scroll = (k + HOLD / 2) * 2 * SEG - L.focusX / L.u; },
+  select(k) { selectKf(k, false); },
+  handleClient(c, k) {
+    const h = handlePos(edWorld, c, k), r = ed.getBoundingClientRect();
+    return [r.left + EW / 2 + h.x * EU, r.top + EW / 2 + h.y * EU];
+  },
+  sheet() {   // debug: every keyframe as a still patch, side by side
+    sheetMode = true;
+    const ctx = pctx, n = KF.length, cw = W / n, uu = Math.min(cw / 6, H / 9);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = C.ground; ctx.fillRect(0, 0, W, H);
+    KF.forEach((k, idx) => {
+      const world = makeWorld(fixedParams(k), false, 0), tiles = [];
+      for (let j = -4; j <= 4; j++) for (let i = Math.floor((-5 + j) / 2); i <= Math.ceil((5 + j) / 2); i++) { const t = world.tile(i, j); t.path = polyPath(t.poly); tiles.push(t); }
+      ctx.save(); ctx.beginPath(); ctx.rect(idx * cw + 4, 0, cw - 8, H); ctx.clip();
+      ctx.setTransform(dpr * uu, 0, 0, dpr * uu, (idx + .5) * cw * dpr, H / 2 * dpr);
+      for (const t of tiles) paintTile(ctx, t, 1 / uu);
+      strokeEdges(ctx, world.edges, 2.2 / uu);
+      ctx.restore();
+    });
+  },
+};
+const restoreBtn = document.getElementById('restoreBtn');
+restoreBtn.addEventListener('click', () => {
+  KF = clone(ORIGINALS); fromClaude = false; refreshFlats(); buildKfButtons();
+  restoreBtn.classList.add('hidden'); document.getElementById('askNotes').textContent = '';
+  selectKf(1, true);
+});
+
+// ---------- Ask Claude ----------
+const askGroup = document.getElementById('askGroup'), askBtn = document.getElementById('askBtn');
+const askInput = document.getElementById('askInput'), askStatus = document.getElementById('askStatus');
+const HIDE_CODES = new Set(['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed', 'session_expired']);
+let sample = null;
+(async () => {
+  try { if (window.claude && window.claude.use) sample = await window.claude.use('sample'); } catch (e) { sample = null; }
+  if (sample) askGroup.classList.remove('hidden');
+})();
+
+const SCHEMA_EXAMPLE = {
+  keyframes: [{
+    name: 'Fish', note: 'Snout pushes right; the dent it leaves is the next fish’s tail.',
+    lattice: 0.1, symmetry: 'p1',
+    edges: { right: [[0.2, 0.12], [0.5, 0.36], [0.82, 0.1]], upperLeft: [[0.3, 0.04], [0.62, 0.36], [0.84, 0.06]], lowerLeft: [[0.28, 0.2], [0.55, 0.05], [0.8, -0.12]] },
+    eye: [0.52, -0.12, 0.12], fin: [[0.18, -0.42], [0.02, 0], [0.18, 0.42]], mark: [[-0.85, 0.06], [-0.35, 0.14], [0.1, 0.1]],
+    texture: 'scales', textureAngle: 0,
+  }],
+};
+function buildPrompt(idea) {
+  return `You design keyframes for an endlessly morphing tessellation strip, like a woodcut where one creature gradually becomes another. The strip interpolates between your keyframes in order, then loops back to the first.
+
+Every tile is a hexagon (or, with lattice=1, a brick-laid square). A tile owns three edges; the opposite three edges are the SAME curves arriving from its neighbours, so whatever bulges out on one side dents in on the opposite side. That is what lets the shapes interlock; it can never leave a gap.
+
+Each edge is a smooth curve through 3 control points [t, y]:
+- t = fraction along the edge's straight chord, 0.08 to 0.92 (keep them roughly increasing).
+- y = sideways offset as a fraction of the edge length, -0.42 to 0.42. Positive = bulge OUT of the tile on the named side.
+Edges:
+- "right": the tile's right side, from its top-right corner down to its bottom-right corner. Positive y pushes out to the right (a snout, a beak, a spout); the LEFT side gets the matching dent (a tail notch, a handle gap).
+- "upperLeft": from the tile's left corner up to its top corner. Positive y pushes up-left (a fin, a wing, ears, a lid); the lower-right side gets the matching dent.
+- "lowerLeft": from the bottom corner to the left corner. Positive y pushes down-left (legs, feet, a stem, a base); the upper-right side gets the matching dent.
+
+Other fields, in tile-local units where the tile spans about x -1..1 and y -1.2..1.2, x to the right, y DOWNWARD (negative y is up):
+- "lattice": 0 = hexagons, 1 = brick-laid squares, in between allowed.
+- "symmetry": "p1" (edges independent), "p2" (each edge point-symmetric about its middle), "p3" (all three edges identical: three-fold turning), "p6" (both). Use p1 for most creatures.
+- "eye": [x, y, radius] with radius 0 to 0.2 (0 = no eye). Put it near the head.
+- "fin": three points [[x,y],[x,y],[x,y]] of one bold curved line drawn inside the tile (gill, wing line, ear, leaf rib, handle). All zeros = none.
+- "mark": three points of a dotted curve inside the tile (lateral line, spots, steam, seam). All zeros = none.
+- "texture": one of "plain", "grain", "scales", "feathers", "fur", "veins". "textureAngle": degrees -90..90.
+- "name": 1-2 words. "note": one short line (under 90 characters) describing what changes at this stage.
+
+Example of one keyframe (a fish facing right):
+${JSON.stringify(SCHEMA_EXAMPLE)}
+
+Now design 2 to 4 keyframes for this metamorphosis: "${idea.replace(/"/g, "'").slice(0, 200)}".
+Make neighbouring keyframes clearly different silhouettes, each readable as its subject when tiled. Reply with ONLY the JSON object {"keyframes":[...]} and nothing else.`;
+}
+function copyFor(code) {
+  return ({ rate_limited: 'Too many asks at once. Give it a minute.', refused: 'Claude declined that one. Try another idea.', invalid_json: 'The answer was not readable JSON. Try again.', prompt_too_large: 'That description is too long.', cancelled: 'Stopped.' })[code] || 'Something went wrong. Try again.';
+}
+askBtn.addEventListener('click', async () => {
+  if (!sample) return;
+  const idea = askInput.value.trim();
+  if (!idea) { askInput.focus(); return; }
+  askBtn.disabled = true; askStatus.textContent = 'Thinking...';
+  try {
+    const data = await sample.json(buildPrompt(idea), { modelTier: 'default' });
+    const n = applyKeyframes(data);
+    askStatus.textContent = `${n} keyframes from Claude. Drag them in the editor too.`;
+  } catch (e) {
+    const code = e && e.code;
+    if (HIDE_CODES.has(code)) { askGroup.classList.add('hidden'); return; }
+    askStatus.textContent = code ? copyFor(code) : 'That answer could not be turned into tiles. Try again.';
+  } finally { askBtn.disabled = false; }
+});
+askInput.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') askBtn.click(); });
+
+// ---------- loop ----------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000); last = now;
+  if (!dragging) {
+    if (target !== null) {
+      scroll += (target - scroll) * Math.min(1, dt * 2.6);
+      vel = playing ? AUTO : 0;
+      if (Math.abs(target - scroll) < .01) target = null;
+    } else {
+      vel += ((playing ? AUTO : 0) - vel) * Math.min(1, dt * 1.6);
+      scroll += vel * dt;
+    }
+  }
+  if (!reduced) time += dt;
+  if (!sheetMode) drawPlate();
+  requestAnimationFrame(frame);
+}
+addEventListener('resize', () => { layout(); drawEditor(); });
+layout();
+scroll = (0.62) * 2 * SEG - L.focusX / L.u;   // open mid-way between the bare grid and the fish
+buildKfButtons(); syncControls(); drawEditor();
+if (document.fonts) document.fonts.ready.then(() => { layout(); drawEditor(); });
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
