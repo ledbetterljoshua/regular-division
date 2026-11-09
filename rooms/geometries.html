@@ -1,0 +1,1050 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Three Geometries</title>
+<link rel="stylesheet" href="../studio.css">
+<style>
+  :root { --print: #6e9e9a; --brick: #b0614f; }
+  .stepper { gap: 4px; }
+  .stepper .sym { font: 500 13px var(--mono); color: var(--paper-dim); width: 14px; text-align: center; }
+  .stepper output { font: 500 15px var(--mono); color: var(--paper); min-width: 26px; text-align: center; }
+  .stepper .btn { width: 30px; padding: 7px 0; text-align: center; }
+  .stepper .gap { width: 14px; }
+  .presets .btn { padding: 6px 7px; font-size: 11px; }
+  .presets .btn small { color: inherit; opacity: .7; font-size: 10px; }
+  .readout { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 8px; }
+  .readout .math { white-space: nowrap; }
+  .readout b { color: var(--paper); font-weight: 500; }
+  .geo-name { font: 700 20px/1 var(--display); letter-spacing: .04em; text-transform: uppercase; color: var(--print); }
+  .geo-name.hyp { color: var(--brick); }
+  .geo-name.flat { color: var(--paper); }
+  .seg { display: flex; }
+  .seg .btn { flex: 1; }
+  .seg .btn + .btn { border-left: 0; }
+  .padwrap { position: relative; width: 100%; aspect-ratio: 1; background: var(--ink-2); border: 1px solid var(--ink-3); }
+  #pad { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+  .brushes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .brushes .btn { padding: 7px 2px; font-size: 11px; letter-spacing: 0; white-space: nowrap; }
+  .brushes .sw { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: 0; border: 1px solid var(--paper-dim); }
+  .sizerow { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; }
+  .caption { position: absolute; right: max(18px, env(safe-area-inset-right, 0px)); bottom: max(16px, env(safe-area-inset-bottom, 0px));
+    font: 500 11px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--paper-dim); text-align: right; pointer-events: none; z-index: 2;
+    background: color-mix(in oklab, var(--ink) 82%, transparent); padding: 7px 10px; }
+  .caption b { color: var(--paper); font-weight: 500; }
+  .nogl { position: absolute; inset: 0; display: none; place-items: center; padding: 40px; text-align: center; color: var(--paper-dim); font: italic 16px var(--serif); }
+  @media (max-width: 720px) {
+    .caption { top: max(12px, env(safe-area-inset-top, 0px)); bottom: auto; right: 12px; font-size: 10px; }
+    .caption .more { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="room">
+  <canvas class="plate" id="plate" aria-label="A tiling of one painted cell across a sphere, the plane, or the hyperbolic disk"></canvas>
+  <div class="caption" id="caption" aria-live="polite"></div>
+  <div class="nogl" id="nogl">This room needs WebGL2, which this browser doesn't provide.</div>
+  <aside class="rail" id="rail">
+    <div class="rail-head"><a class="back" href="../index.html">← Studio</a>
+      <button class="toggle" id="railToggle" aria-expanded="true">hide</button></div>
+    <h1 class="room-title">Three <em>Geometries</em></h1>
+    <p class="lede">Escher tiled the flat plane, carved creatures onto wooden spheres, and late in life built his <i>Circle Limit</i> prints by compass, ring by ring toward an edge he could never reach. One rule, the triangle group <b>(p,&thinsp;q,&thinsp;2)</b>, makes all three. Paint one cell and the geometry does the rest.</p>
+
+    <div class="group">
+      <span class="label">Geometry · {p, q}</span>
+      <div class="row stepper">
+        <span class="sym">p</span>
+        <button class="btn" id="pDec" aria-label="decrease p">−</button>
+        <output id="pOut">8</output>
+        <button class="btn" id="pInc" aria-label="increase p">+</button>
+        <span class="gap"></span>
+        <span class="sym">q</span>
+        <button class="btn" id="qDec" aria-label="decrease q">−</button>
+        <output id="qOut">3</output>
+        <button class="btn" id="qInc" aria-label="increase q">+</button>
+      </div>
+      <div class="row presets" id="presets"></div>
+      <div class="readout">
+        <span class="math" id="curv">1/p + 1/q − 1/2</span>
+        <span class="geo-name" id="geoName">—</span>
+      </div>
+    </div>
+
+    <div class="group">
+      <span class="label">Motif · one cell</span>
+      <div class="row seg" role="group" aria-label="default motif">
+        <button class="btn" data-motif="fish" aria-pressed="true">Fish</button>
+        <button class="btn" data-motif="bird" aria-pressed="false">Bird</button>
+        <button class="btn" data-motif="moth" aria-pressed="false">Moth</button>
+      </div>
+      <div class="padwrap"><canvas id="pad" width="512" height="512" aria-label="Drawing pad: the fundamental cell"></canvas></div>
+      <div class="row brushes" role="group" aria-label="brush">
+        <button class="btn" data-brush="ink" aria-pressed="true"><span class="sw" style="background:#121315"></span>Ink</button>
+        <button class="btn" data-brush="print" aria-pressed="false"><span class="sw" style="background:#2f5b60"></span>Print</button>
+        <button class="btn" data-brush="counter" aria-pressed="false"><span class="sw" style="background:#9a4b3d"></span>Counter</button>
+        <button class="btn" data-brush="erase" aria-pressed="false"><span class="sw" style="background:#e8e4d8"></span>Erase</button>
+      </div>
+      <div class="sizerow"><span class="label">Size</span><input type="range" id="size" min="2" max="48" value="8" aria-label="brush size"></div>
+      <div class="row">
+        <button class="btn" id="undo">Undo</button>
+        <button class="btn" id="clear">Clear</button>
+        <button class="btn" id="platePaint" aria-pressed="false">Paint on plate</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <span class="label">Symmetry</span>
+      <div class="seg" role="group" aria-label="symmetry mode">
+        <button class="btn" id="mRot" aria-pressed="true">Rotation</button>
+        <button class="btn" id="mKal" aria-pressed="false">Kaleidoscope</button>
+      </div>
+      <p class="note" id="modeNote"></p>
+      <div class="row"><button class="btn" id="lines" aria-pressed="false">Construction lines</button></div>
+    </div>
+
+    <div class="group">
+      <span class="label">Drift</span>
+      <input type="range" id="speed" min="0" max="2" step="0.05" value="1" aria-label="drift speed">
+      <p class="note">Drag the plate to travel. On the disk, creatures stream in from the rim; on the sphere you turn the ball.</p>
+    </div>
+  </aside>
+</div>
+
+<script>
+(() => {
+'use strict';
+const $ = (id) => document.getElementById(id);
+const PI = Math.PI;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ---------- palette (sRGB) ----------
+const COL = { ink: [18, 19, 21], paper: [232, 228, 216], teal: [47, 91, 96], brick: [154, 75, 61] };
+
+// ---------- canonical cell (pad texture space, 512x512) ----------
+const TEX = 512, AX = 256, AY = 40, TH = 420, BETA = PI / 6, TB = Math.tan(BETA);
+
+// ---------- state ----------
+const st = {
+  p: 8, q: 3, mode: 'rot', lines: false, speed: reduceMotion ? 0 : 1,
+  motif: 'fish', brush: 'ink', size: 8, platePaint: false,
+};
+let G = null;          // internal geometry (possibly p/q swapped for colouring)
+let M = ident();       // camera Möbius map (plane + disk)
+let Rot = rotXY(-0.55, 0.5);   // sphere orientation (row-major 3x3)
+let dim = 0, dimTarget = 0, pendingGeom = null;
+
+// ---------- complex + Möbius helpers ----------
+function cm(a, b) { return [a[0]*b[0] - a[1]*b[1], a[0]*b[1] + a[1]*b[0]]; }
+function ca(a, b) { return [a[0]+b[0], a[1]+b[1]]; }
+function cdv(a, b) { const d = b[0]*b[0] + b[1]*b[1]; return [(a[0]*b[0] + a[1]*b[1]) / d, (a[1]*b[0] - a[0]*b[1]) / d]; }
+function cj(a) { return [a[0], -a[1]]; }
+function csqrt(a) { const r = Math.hypot(a[0], a[1]), t = Math.atan2(a[1], a[0]) / 2, s = Math.sqrt(r); return [s*Math.cos(t), s*Math.sin(t)]; }
+function ident() { return { a: [1,0], b: [0,0], c: [0,0], d: [1,0] }; }
+function mm(A, B) { return { a: ca(cm(A.a,B.a), cm(A.b,B.c)), b: ca(cm(A.a,B.b), cm(A.b,B.d)), c: ca(cm(A.c,B.a), cm(A.d,B.c)), d: ca(cm(A.c,B.b), cm(A.d,B.d)) }; }
+function mconj(A) { return { a: cj(A.a), b: cj(A.b), c: cj(A.c), d: cj(A.d) }; }
+function mapply(A, z) { return cdv(ca(cm(A.a, z), A.b), ca(cm(A.c, z), A.d)); }
+function mnorm(A) {
+  const det = ca(cm(A.a, A.d), cm([-A.b[0], -A.b[1]], A.c));
+  const s = csqrt(det);
+  const n = { a: cdv(A.a, s), b: cdv(A.b, s), c: cdv(A.c, s), d: cdv(A.d, s) };
+  if (G && G.kind === 2) {        // project back onto SU(1,1)
+    const a = [(n.a[0] + n.d[0]) / 2, (n.a[1] - n.d[1]) / 2];
+    const b = [(n.b[0] + n.c[0]) / 2, (n.b[1] - n.c[1]) / 2];
+    const k = Math.sqrt(Math.max(1e-12, a[0]*a[0] + a[1]*a[1] - b[0]*b[0] - b[1]*b[1]));
+    const A2 = [a[0]/k, a[1]/k], B2 = [b[0]/k, b[1]/k];
+    return { a: A2, b: B2, c: cj(B2), d: cj(A2) };
+  }
+  if (G && G.kind === 1) {        // keep it a similarity z -> a z + b with |a| = 1
+    const a = cdv(n.a, n.d), b = cdv(n.b, n.d), k = Math.hypot(a[0], a[1]);
+    return { a: [a[0]/k, a[1]/k], b, c: [0,0], d: [1,0] };
+  }
+  return n;
+}
+// disk automorphism taking 0 -> a
+function diskT(a) { return { a: [1,0], b: [a[0], a[1]], c: [a[0], -a[1]], d: [1,0] }; }
+function diskTinv(a) { return diskT([-a[0], -a[1]]); }
+
+// ---------- 3x3 rotations (row-major) ----------
+function rotAxis(ax, ang) {
+  const [x, y, z] = ax, c = Math.cos(ang), s = Math.sin(ang), t = 1 - c;
+  return [t*x*x + c, t*x*y - s*z, t*x*z + s*y, t*x*y + s*z, t*y*y + c, t*y*z - s*x, t*x*z - s*y, t*y*z + s*x, t*z*z + c];
+}
+function m3mul(A, B) { const r = new Array(9); for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) r[i*3+j] = A[i*3]*B[j] + A[i*3+1]*B[3+j] + A[i*3+2]*B[6+j]; return r; }
+function m3T(A) { return [A[0], A[3], A[6], A[1], A[4], A[7], A[2], A[5], A[8]]; }
+function rotXY(ax, ay) { return m3mul(rotAxis([1,0,0], ax), rotAxis([0,1,0], ay)); }
+function orthon(R) {
+  let a = [R[0], R[3], R[6]], b = [R[1], R[4], R[7]];
+  const na = Math.hypot(...a); a = a.map(v => v / na);
+  const d = a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; b = b.map((v, i) => v - d * a[i]);
+  const nb = Math.hypot(...b); b = b.map(v => v / nb);
+  const c = [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+  return [a[0], b[0], c[0], a[1], b[1], c[1], a[2], b[2], c[2]];
+}
+
+// ---------- the triangle group ----------
+// Fundamental triangle: vertex at the origin with angle π/P between mirror 1 (real axis)
+// and mirror 2 (line at angle π/P); mirror 3 meets mirror 1 at a right angle and mirror 2 at π/Q.
+function makeGeom(p, q, mode) {
+  let P = p, Q = q;
+  if (mode === 'rot' && p % 2 === 1 && q % 2 === 0) { P = q; Q = p; }   // even vertex at centre allows a proper 2-colouring
+  const curv = 1/p + 1/q - 0.5;
+  const kind = Math.abs(curv) < 1e-9 ? 1 : (curv > 0 ? 0 : 2);
+  const S = PI / P, cq = Math.cos(PI / Q), sp = Math.sin(S);
+  let C = 0, R = 0;
+  if (kind === 2) { const c2 = cq*cq / (cq*cq - sp*sp); C = Math.sqrt(c2); R = Math.sqrt(c2 - 1); }
+  else if (kind === 0) { const c2 = cq*cq / (sp*sp - cq*cq); C = -Math.sqrt(c2); R = Math.sqrt(c2 + 1); }
+  const colMode = mode === 'kal' ? 0 : (P % 2 === 0 ? 1 : 2);
+  const g = { p, q, P, Q, S, curv, kind, C, R, EC: 1, n2: [-Math.sin(S), Math.cos(S)], colMode };
+  g.mats = {
+    1: ident(),
+    2: { a: [Math.cos(2*S), Math.sin(2*S)], b: [0,0], c: [0,0], d: [1,0] },
+    3: kind === 1 ? { a: [-1,0], b: [2,0], c: [0,0], d: [1,0] } : { a: [C,0], b: [R*R - C*C, 0], c: [1,0], d: [-C,0] },
+  };
+  return g;
+}
+function hit(g, ph) {
+  if (g.kind === 1) return g.EC / Math.cos(ph);
+  const s = Math.sqrt(Math.max(g.R*g.R - g.C*g.C*Math.sin(ph)**2, 0));
+  return g.kind === 2 ? g.C*Math.cos(ph) - s : g.C*Math.cos(ph) + s;
+}
+function wrong3(g, x, y) {
+  if (g.kind === 1) return x > g.EC + 1e-12;
+  const d2 = (x - g.C)**2 + y*y;
+  return g.kind === 2 ? d2 < g.R*g.R - 1e-12 : d2 > g.R*g.R + 1e-12;
+}
+function foldSeq(g, w) {
+  let [x, y] = w; const seq = [];
+  for (let i = 0; i < 600; i++) {
+    if (y < -1e-12) { y = -y; seq.push(1); continue; }
+    const d = x*g.n2[0] + y*g.n2[1];
+    if (d > 1e-12) { x -= 2*d*g.n2[0]; y -= 2*d*g.n2[1]; seq.push(2); continue; }
+    if (wrong3(g, x, y)) {
+      if (g.kind === 1) x = 2*g.EC - x;
+      else { const dx = x - g.C, d2 = dx*dx + y*y, k = g.R*g.R / d2; x = g.C + dx*k; y = y*k; }
+      seq.push(3); continue;
+    }
+    break;
+  }
+  return { w: [x, y], seq };
+}
+const FIXUPS = (() => { const out = [[]]; for (const a of [1,2,3]) out.push([a]); for (const a of [1,2,3]) for (const b of [1,2,3]) if (a !== b) out.push([a,b]); for (const a of [1,2,3]) for (const b of [1,2,3]) for (const c of [1,2,3]) if (a !== b && b !== c) out.push([a,b,c]); return out; })();
+// Keep the camera near the origin by applying a symmetry of the tiling that preserves
+// orientation and the tile colouring, so the view is unchanged while precision stays good.
+function reduceCamera() {
+  if (G.kind === 0) return;
+  const w0 = mapply(M, [0, 0]);
+  const { seq } = foldSeq(G, w0);
+  if (seq.length <= 3) return;
+  const count = (s) => { let par = 0, chi = 0; for (const g of s) { par ^= 1; if (g !== 1) chi ^= 1; } return { par, chi }; };
+  const base = count(seq);
+  for (const f of FIXUPS) {
+    const c = count(f), par = base.par ^ c.par, chi = base.chi ^ c.chi;
+    if (par !== 0) continue;
+    if (G.colMode === 1 && chi !== 0) continue;
+    let N = M;
+    for (const g of seq.concat(f)) N = mm(G.mats[g], mconj(N));
+    M = mnorm(N);
+    return;
+  }
+}
+
+// ---------- layout ----------
+const canvas = $('plate'), rail = $('rail');
+const view = { cx: 0, cy: 0, R: 100, tcx: 0, tcy: 0, tR: 100, dpr: 1, w: 1, h: 1, init: false };
+function targetLayout() {
+  const w = innerWidth, h = innerHeight, phone = w <= 720;
+  const rr = rail.getBoundingClientRect(), collapsed = rail.classList.contains('collapsed');
+  let x0 = 0, x1 = w, y0 = 0, y1 = h, m = phone ? 12 : 28;
+  if (phone) { if (!collapsed) { y1 = rr.top; y0 = 40; } else y0 = rr.bottom; }
+  else if (!collapsed) x0 = rr.right;
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const R = Math.max(60, Math.min((x1 - x0) / 2, (y1 - y0) / 2) - m);
+  return { cx, cy, R };
+}
+function resize() {
+  view.dpr = Math.min(2, devicePixelRatio || 1);
+  view.w = innerWidth; view.h = innerHeight;
+  canvas.width = Math.round(view.w * view.dpr); canvas.height = Math.round(view.h * view.dpr);
+  const t = targetLayout(); view.tcx = t.cx; view.tcy = t.cy; view.tR = t.R;
+  if (!view.init) { view.cx = t.cx; view.cy = t.cy; view.R = t.R; view.init = true; }
+  needs = true;
+}
+function plateScale() { return view.R * 0.27; }     // plane: css px per model unit
+function ballR() { return view.R * 0.94; }
+
+// screen (css px) -> model point w; returns null if outside the model region
+function screenToModel(x, y) {
+  const dx = x - view.cx, dy = view.cy - y;
+  if (G.kind === 0) {
+    const R = ballR(), qx = dx / R, qy = dy / R, rr = qx*qx + qy*qy;
+    if (rr >= 1) return null;
+    const zf = Math.sqrt(1 - rr), r = Rot;
+    const P = [r[0]*qx + r[1]*qy + r[2]*zf, r[3]*qx + r[4]*qy + r[5]*zf, r[6]*qx + r[7]*qy + r[8]*zf];
+    const den = Math.max(1 + P[2], 1e-6);
+    return [P[0] / den, P[1] / den];
+  }
+  if (G.kind === 2) {
+    const z = [dx / view.R, dy / view.R];
+    if (z[0]*z[0] + z[1]*z[1] >= 0.999) return null;
+    return mapply(M, z);
+  }
+  return mapply(M, [dx / plateScale(), dy / plateScale()]);
+}
+function screenZ(x, y) {
+  const s = G.kind === 1 ? plateScale() : view.R;
+  return [(x - view.cx) / s, (view.cy - y) / s];
+}
+
+// ---------- WebGL ----------
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: true });
+if (!gl) { $('nogl').style.display = 'grid'; }
+
+const VS = `#version 300 es
+in vec2 aP; void main(){ gl_Position = vec4(aP, 0., 1.); }`;
+const FS = `#version 300 es
+precision highp float;
+uniform vec2 uCenter; uniform float uRad, uBall, uPlane;
+uniform int uKind, uRotMode, uColMode;
+uniform float uS, uC, uR, uEC, uLines, uDim;
+uniform vec2 uN2;
+uniform vec4 uMab, uMcd;
+uniform mat3 uRot;
+uniform sampler2D uTex;
+uniform float uDpr;
+out vec4 o;
+const vec3 INK = vec3(18.,19.,21.)/255.;
+const vec3 PAPER = vec3(232.,228.,216.)/255.;
+const vec3 TEAL = vec3(47.,91.,96.)/255.;
+const vec3 BRICK = vec3(154.,75.,61.)/255.;
+const float TEXN = 512., AXT = 256., AYT = 40., THT = 420., BETA = 0.5235987756;
+vec2 cmul(vec2 a, vec2 b){ return vec2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x); }
+vec2 cdiv(vec2 a, vec2 b){ float d = dot(b,b); return vec2(a.x*b.x + a.y*b.y, a.y*b.x - a.x*b.y)/d; }
+float hash(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
+float hitR(float ph){
+  if (uKind == 1) return uEC/cos(ph);
+  float s = sqrt(max(uR*uR - uC*uC*sin(ph)*sin(ph), 0.));
+  return uKind == 2 ? uC*cos(ph) - s : uC*cos(ph) + s;
+}
+void main(){
+  vec2 fc = gl_FragCoord.xy / uDpr;           // css px, y up
+  vec2 rel = fc - uCenter;
+  vec3 bg = INK;
+  float cover = 1.;
+  vec2 w; float J; vec3 nrm = vec3(0., 0., 1.); float zf = 1.;
+  float lenq = length(rel) / uRad;
+  if (uKind == 0) {
+    vec2 q = rel / uBall; float rr = dot(q,q);
+    cover = clamp((1. - sqrt(rr)) * uBall * uDpr + .5, 0., 1.);
+    if (cover <= 0.) {
+      float ring = 1. - smoothstep(.4, 1.3, abs(length(rel) - uBall - 10.) * uDpr);
+      vec3 c = mix(bg, PAPER, ring * .16);
+      c += (hash(gl_FragCoord.xy) - .5) * .012;
+      o = vec4(mix(c, INK, uDim*0.), 1.); return;
+    }
+    zf = sqrt(max(1. - rr, 1e-5));
+    nrm = vec3(q, zf);
+    vec3 P = uRot * nrm;
+    w = P.xy / max(1. + P.z, 1e-6);
+    J = (1. / uBall) / sqrt(max(zf, .05)) * (1. + dot(w,w)) * .5;
+  } else if (uKind == 2) {
+    vec2 z = rel / uRad; float r = length(z);
+    cover = clamp((1. - r) * uRad * uDpr + .5, 0., 1.);
+    if (cover <= 0.) {
+      float ring = 1. - smoothstep(.4, 1.3, abs(length(rel) - uRad - 10.) * uDpr);
+      vec3 c = mix(bg, PAPER, ring * .16);
+      c += (hash(gl_FragCoord.xy) - .5) * .012;
+      o = vec4(c, 1.); return;
+    }
+    z *= min(1., .99995 / max(r, 1e-9));
+    vec2 den = cmul(uMcd.xy, z) + uMcd.zw;
+    w = cdiv(cmul(uMab.xy, z) + uMab.zw, den);
+    J = (1. / uRad) / dot(den, den);
+  } else {
+    vec2 z = rel / uPlane;
+    vec2 den = cmul(uMcd.xy, z) + uMcd.zw;
+    w = cdiv(cmul(uMab.xy, z) + uMab.zw, den);
+    J = (1. / uPlane) / dot(den, den);
+  }
+  J /= uDpr;   // model units per device pixel
+
+  // fold into the fundamental triangle
+  float S = uS, par = 0., chi = 0.; bool done = false;
+  for (int i = 0; i < 90; i++) {
+    float th = atan(w.y, w.x);
+    float k = floor(th / (2.*S));
+    float tm = th - k*2.*S;
+    float rf = step(S, tm);
+    tm = mix(tm, 2.*S - tm, rf);
+    w = length(w) * vec2(cos(tm), sin(tm));
+    chi += k + rf; par += rf;
+    vec2 d = w - vec2(uC, 0.); float d2 = dot(d, d);
+    bool bad = uKind == 1 ? w.x > uEC : (uKind == 2 ? d2 < uR*uR : d2 > uR*uR);
+    if (!bad) { done = true; break; }
+    if (uKind == 1) w.x = 2.*uEC - w.x;
+    else { w = vec2(uC, 0.) + uR*uR*d/d2; J *= uR*uR/d2; }
+    par += 1.; chi += 1.;
+  }
+  bool odd = mod(par, 2.) > .5;
+  bool chiOdd = mod(chi, 2.) > .5;
+
+  // canonical cell coordinates -> pad texture
+  float ph = clamp(atan(w.y, w.x), 0., S);
+  float u = ph / S;
+  float r3 = hitR(ph);
+  float v = clamp(length(w) / r3, 0., 1.);
+  float sg = (uRotMode == 1 && odd) ? -1. : 1.;
+  float ang = sg * u * BETA;
+  vec2 tp = vec2(AXT + v*THT*tan(ang), AYT + v*THT);
+  float tpm = THT / r3 * max(1., BETA / S) / (cos(ang)*cos(ang));
+  float lod = done ? log2(max(J * tpm, 1e-6)) : 12.;
+  vec4 t = textureLod(uTex, tp / TEXN, max(lod, 0.));
+
+  float cellPx = hitR(0.) / J;
+  float fade = done ? smoothstep(7., 1.5, cellPx) : 1.;
+  float which = uColMode == 0 ? float(odd) : (uColMode == 1 ? float(chiOdd) : 0.);
+  vec3 base = mix(TEAL, BRICK, which), ctr = mix(BRICK, TEAL, which);
+  if (uColMode != 2) { vec3 mean = (TEAL + BRICK) * .5; base = mix(base, mean, fade); ctr = mix(ctr, mean, fade); }
+
+  float ink = t.r, pap = t.g, cc = t.b, rest = max(0., 1. - ink - pap - cc);
+  // carved grain inside printed areas, travelling with the cell
+  float gr = sin(tp.y * .62 + sin(tp.x * .045 + tp.y*.01) * 2.6);
+  float grain = smoothstep(.55, .95, gr) * (1. - smoothstep(-.5, 1.2, lod));
+  vec3 baseG = mix(base, base * .8, grain * .55);
+  vec3 col = baseG * rest + INK * ink + PAPER * pap + ctr * cc;
+
+  // construction lines: the three mirrors, drawn as compass arcs
+  if (uLines > 0.) {
+    float dm1 = abs(w.y), dm2 = abs(dot(w, uN2));
+    float dm3 = uKind == 1 ? abs(w.x - uEC) : abs(length(w - vec2(uC, 0.)) - uR);
+    float dpx = min(min(dm1, dm2), dm3) / J;
+    float ln = (1. - smoothstep(.25, 1.05, dpx)) * (1. - fade) * uLines;
+    col = mix(col, INK, ln * .7);
+  }
+
+  if (uKind == 0) {
+    vec3 L = normalize(vec3(-.5, .62, .62));
+    float dif = max(dot(nrm, L), 0.);
+    vec3 H = normalize(L + vec3(0., 0., 1.));
+    float sp = pow(max(dot(nrm, H), 0.), 30.);
+    col = col * (.34 + .78 * dif) + sp * .07 * PAPER;
+    col *= mix(.55, 1., smoothstep(0., .45, zf));
+  } else if (uKind == 1) {
+    col = mix(col, INK, smoothstep(1.02, 1.85, lenq) * .92);
+  }
+  col += (hash(gl_FragCoord.xy) - .5) * .022;
+  col = mix(col, INK, uDim);
+  o = vec4(mix(bg, col, cover), 1.);
+}`;
+
+let prog, U = {}, tex, needs = true;
+function compile(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); }
+  return s;
+}
+if (gl) {
+  prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+  gl.bindAttribLocation(prog, 0, 'aP');
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  for (const n of ['uCenter','uRad','uBall','uPlane','uKind','uRotMode','uColMode','uS','uC','uR','uEC','uLines','uDim','uN2','uMab','uMcd','uRot','uTex','uDpr'])
+    U[n] = gl.getUniformLocation(prog, n);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.uniform1i(U.uTex, 0);
+}
+
+// ---------- the motif: channel-encoded data canvas ----------
+// R = ink, G = paper, B = counter colour; black = the cell's own print colour.
+const data = document.createElement('canvas'); data.width = data.height = TEX;
+const dctx = data.getContext('2d', { willReadFrequently: true });
+const CH = { ink: 'rgb(255,0,0)', erase: 'rgb(0,255,0)', counter: 'rgb(0,0,255)', print: 'rgb(0,0,0)' };
+let texDirty = true, padDirty = true;
+
+function kitePath(c, inset = 0) {
+  const ay = AY + inset / Math.sin(BETA), by = AY + TH - inset, hw = (by - ay) * TB;
+  c.beginPath(); c.moveTo(AX, ay); c.lineTo(AX + hw, by); c.lineTo(AX - hw, by); c.closePath();
+}
+function bez(P0, P1, P2, P3) {
+  const pt = (s) => { const u = 1 - s; return [u*u*u*P0[0] + 3*u*u*s*P1[0] + 3*u*s*s*P2[0] + s*s*s*P3[0], u*u*u*P0[1] + 3*u*u*s*P1[1] + 3*u*s*s*P2[1] + s*s*s*P3[1]]; };
+  const tan = (s) => { const u = 1 - s; const x = 3*u*u*(P1[0]-P0[0]) + 6*u*s*(P2[0]-P1[0]) + 3*s*s*(P3[0]-P2[0]); const y = 3*u*u*(P1[1]-P0[1]) + 6*u*s*(P2[1]-P1[1]) + 3*s*s*(P3[1]-P2[1]); const l = Math.hypot(x, y) || 1; return [x/l, y/l]; };
+  return { pt, tan, nrm: (s) => { const t = tan(s); return [-t[1], t[0]]; } };
+}
+function poly(c, pts) { c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.closePath(); }
+function dot(c, x, y, r, style) { c.fillStyle = style; c.beginPath(); c.arc(x, y, r, 0, 2*PI); c.fill(); }
+function eye(c, x, y, r, look = [0, 0]) {
+  dot(c, x, y, r + 3, CH.ink); dot(c, x, y, r, CH.erase);
+  dot(c, x + look[0]*r*.35, y + look[1]*r*.35, r*.52, CH.ink);
+  dot(c, x + look[0]*r*.35 - r*.22, y + look[1]*r*.35 - r*.22, r*.17, CH.erase);
+}
+// body outline from a spine and half-width profile
+function spineBody(sp, wid, n = 90) {
+  const L = [], Rr = [];
+  for (let i = 0; i <= n; i++) {
+    const s = i / n, p = sp.pt(s), m = sp.nrm(s), w = wid(s);
+    L.push([p[0] + m[0]*w, p[1] + m[1]*w]); Rr.push([p[0] - m[0]*w, p[1] - m[1]*w]);
+  }
+  return L.concat(Rr.reverse());
+}
+function off(sp, s, k) { const p = sp.pt(s), m = sp.nrm(s); return [p[0] + m[0]*k, p[1] + m[1]*k]; }
+
+function drawFish(c) {
+  c.fillStyle = CH.erase; c.fillRect(0, 0, TEX, TEX);
+  c.save(); kitePath(c, 6); c.clip();
+  // faint hatching in the ground (the sea)
+  c.strokeStyle = 'rgba(255,0,0,0.33)'; c.lineWidth = 1.4;
+  for (let k = -500; k < 600; k += 15) { c.beginPath(); c.moveTo(k, 0); c.lineTo(k + 300, 512); c.stroke(); }
+
+  const sp = bez([398, 388], [298, 372], [118, 296], [240, 168]);
+  const W = 86;
+  const wid = (s) => { const a = Math.min(s / 0.2, 1), rise = Math.sqrt(1 - (1 - a)*(1 - a)); return W * rise * (0.12 + 0.88 * Math.pow(1 - s, 1.1)); };
+  const body = spineBody(sp, wid);
+  const ink = (lw) => { c.strokeStyle = CH.ink; c.lineWidth = lw; c.lineJoin = 'round'; c.lineCap = 'round'; };
+  const rays = (shape, from, n, len) => {
+    c.save(); poly(c, shape); c.clip(); ink(1.8);
+    for (let i = 0; i < n; i++) { const a = from.a0 + (from.a1 - from.a0) * i / (n - 1); c.beginPath(); c.moveTo(from.x, from.y); c.lineTo(from.x + Math.cos(a)*len, from.y + Math.sin(a)*len); c.stroke(); }
+    c.restore();
+  };
+
+  // tail fin: forked, counter colour, rayed
+  const T = sp.pt(1), td = sp.tan(1), ta = Math.atan2(td[1], td[0]);
+  const at = (da, len) => [T[0] + Math.cos(ta + da)*len, T[1] + Math.sin(ta + da)*len];
+  const tail = [off(sp, 0.96, 10)];
+  for (let i = 0; i <= 16; i++) { const k = i / 16, da = 0.62 - 1.24*k, len = 74 - 34*Math.sin(PI*k) ; tail.push(at(da, len)); }
+  tail.push(off(sp, 0.96, -10));
+  c.fillStyle = CH.counter; poly(c, tail); c.fill();
+  rays(tail, { x: T[0] - td[0]*8, y: T[1] - td[1]*8, a0: ta - 0.62, a1: ta + 0.62 }, 13, 90);
+  ink(4); poly(c, tail); c.stroke();
+
+  // dorsal (+n side) and anal (-n side) fins
+  const fin = (s0, s1, side, h, skew) => {
+    const pts = [];
+    for (let i = 0; i <= 24; i++) { const s = s0 + (s1 - s0)*i/24; pts.push(off(sp, s, side*(wid(s) - 4))); }
+    for (let i = 24; i >= 0; i--) { const k = i/24, s = s0 + (s1 - s0)*Math.min(1, k + skew*Math.sin(PI*k)), e = Math.pow(Math.sin(PI*Math.pow(k, 0.6)), 0.8); pts.push(off(sp, s, side*(wid(s) + h*e))); }
+    return pts;
+  };
+  for (const f of [fin(0.3, 0.62, 1, 44, 0.18), fin(0.6, 0.8, -1, 30, 0.2)]) {
+    c.fillStyle = CH.counter; poly(c, f); c.fill();
+    c.save(); poly(c, f); c.clip(); ink(1.8);
+    const n = f.length / 2;
+    for (let i = 2; i < n - 1; i += 2) { const a = f[i], b = f[f.length - 1 - i]; c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0] + (b[0]-a[0])*0.3, b[1] + (b[1]-a[1])*0.3); c.stroke(); }
+    c.restore();
+    ink(3.5); poly(c, f); c.stroke();
+  }
+
+  // body
+  c.fillStyle = CH.print; poly(c, body); c.fill();
+  c.save(); poly(c, body); c.clip();
+  // belly band in paper, the scales stop at its edge
+  const belly = [];
+  for (let i = 0; i <= 40; i++) { const s = 0.2 + 0.6*i/40; belly.push(off(sp, s, -wid(s) * 1.05)); }
+  for (let i = 40; i >= 0; i--) { const k = i/40, s = 0.2 + 0.6*k; belly.push(off(sp, s, -wid(s) * (1 - 0.3*Math.sin(PI*Math.pow(k, 0.7))))); }
+  c.fillStyle = CH.erase; poly(c, belly); c.fill();
+  // scales: scallops facing the head, shrinking toward the tail
+  ink(2.1);
+  let row = 0;
+  for (let s = 0.27; s < 0.96; s += 0.042, row++) {
+    const p = sp.pt(s), m = sp.nrm(s), t = sp.tan(s), w = wid(s), ha = Math.atan2(-t[1], -t[0]);
+    const rad = 11 * (0.5 + 0.5 * (1 - s));
+    for (let j = -7; j <= 7; j++) {
+      const k = (j + (row % 2) * 0.5) * rad * 1.7;
+      if (k > w - 5 || k < -w * 0.7) continue;
+      c.beginPath(); c.arc(p[0] + m[0]*k, p[1] + m[1]*k, rad, ha - 1.4, ha + 1.4); c.stroke();
+    }
+  }
+  // belly edge
+  ink(2.2); c.beginPath();
+  for (let i = 0; i <= 40; i++) { const k = i/40, s = 0.2 + 0.6*k; const p = off(sp, s, -wid(s) * (1 - 0.3*Math.sin(PI*Math.pow(k, 0.7)))); i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1]); }
+  c.stroke();
+  // head: smooth plate in front of the gill
+  const head = [];
+  for (let i = 0; i <= 30; i++) { const s = 0.25*i/30; head.push(off(sp, s, wid(s) + 2)); }
+  for (let i = 30; i >= 0; i--) { const s = 0.25*i/30; head.push(off(sp, s, -wid(s) - 2)); }
+  c.fillStyle = CH.print; poly(c, head); c.fill();
+  // gill covers: two arcs bowed toward the tail
+  const gill = (s0, bow, k0, k1, lw) => {
+    ink(lw); c.beginPath();
+    for (let i = 0; i <= 24; i++) { const k = k0 + (k1 - k0)*i/24, s = s0 + bow*(1 - k*k); const p = off(sp, s, k * wid(s)); i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1]); }
+    c.stroke();
+  };
+  gill(0.205, 0.05, -1, 1, 4);
+  gill(0.175, 0.035, -0.75, 0.85, 1.8);
+  // lateral line
+  c.setLineDash([7, 6]); ink(2.4); c.beginPath();
+  for (let i = 0; i <= 40; i++) { const s = 0.26 + 0.68*i/40; const p = off(sp, s, wid(s)*0.18); i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1]); }
+  c.stroke(); c.setLineDash([]);
+  c.restore();
+
+  ink(4.5); poly(c, body); c.stroke();
+  // pectoral fin: a small rayed fan behind the gill
+  const pb = off(sp, 0.25, -wid(0.25)*0.25), pt = sp.tan(0.25), pa = Math.atan2(pt[1], pt[0]);
+  const pec = [pb];
+  for (let i = 0; i <= 12; i++) { const a = pa - 0.42 + 0.5*i/12, L = 52 + 6*Math.sin(PI*i/12); pec.push([pb[0] + Math.cos(a)*L, pb[1] + Math.sin(a)*L]); }
+  c.fillStyle = CH.counter; poly(c, pec); c.fill();
+  rays(pec, { x: pb[0], y: pb[1], a0: pa - 0.42, a1: pa + 0.08 }, 7, 70);
+  ink(3); poly(c, pec); c.stroke();
+  // mouth
+  const m0 = sp.pt(0), mt = sp.tan(0), mn = sp.nrm(0);
+  ink(3.5);
+  c.beginPath(); c.moveTo(m0[0] + mt[0]*3 - mn[0]*6, m0[1] + mt[1]*3 - mn[1]*6);
+  c.quadraticCurveTo(m0[0] + mt[0]*16 - mn[0]*10, m0[1] + mt[1]*16 - mn[1]*10, m0[0] + mt[0]*28 - mn[0]*22, m0[1] + mt[1]*28 - mn[1]*22); c.stroke();
+  // eye
+  const e = off(sp, 0.095, wid(0.095)*0.28);
+  eye(c, e[0], e[1], 13.5, [-mt[0], -mt[1]]);
+  c.restore();
+}
+
+function drawBird(c) {
+  c.fillStyle = CH.erase; c.fillRect(0, 0, TEX, TEX);
+  c.save(); kitePath(c, 6); c.clip();
+  // sky hatching
+  c.strokeStyle = 'rgba(255,0,0,0.32)'; c.lineWidth = 1.3;
+  for (let y = 0; y < 512; y += 13) { c.beginPath(); c.moveTo(0, y); c.lineTo(512, y + 20); c.stroke(); }
+
+  // spine: head (bottom-left) to tail (toward apex)
+  const sp = bez([170, 412], [210, 380], [262, 300], [262, 196]);
+  const wid = (s) => { const a = Math.min(s/0.16, 1); return 46 * Math.sqrt(1 - (1-a)*(1-a)) * (0.3 + 0.7*Math.sin(PI*Math.min(1, 0.25 + s*0.85))); };
+  // tail fan toward apex
+  const T = sp.pt(0.97), td = sp.tan(1), ta = Math.atan2(td[1], td[0]);
+  const tail = [off(sp, 0.9, 16)];
+  for (let i = 0; i <= 6; i++) { const a = ta - 0.34 + 0.68*i/6, L = 78 - Math.abs(i - 3)*3; tail.push([T[0] + Math.cos(a)*L, T[1] + Math.sin(a)*L]); }
+  tail.push(off(sp, 0.9, -16));
+  c.fillStyle = CH.counter; poly(c, tail); c.fill();
+  c.strokeStyle = CH.ink; c.lineWidth = 2.2;
+  for (let i = 0; i <= 6; i++) { const a = ta - 0.34 + 0.68*i/6; c.beginPath(); c.moveTo(T[0], T[1]); c.lineTo(T[0] + Math.cos(a)*70, T[1] + Math.sin(a)*70); c.stroke(); }
+  c.lineWidth = 3.5; c.lineJoin = 'round'; poly(c, tail); c.stroke();
+
+  // far wing (left), behind the body: raised, with stepped primaries
+  const fwTips = [[132, 236], [120, 262], [116, 290], [122, 316]];
+  const fwPath = () => {
+    c.beginPath(); c.moveTo(236, 292);
+    c.bezierCurveTo(206, 252, 170, 226, 118, 236);
+    for (let i = 1; i < fwTips.length; i++) { const a = fwTips[i-1], b = fwTips[i]; c.quadraticCurveTo((a[0]+b[0])/2 + 16, (a[1]+b[1])/2 - 2, b[0], b[1]); }
+    c.bezierCurveTo(150, 330, 196, 338, 226, 344); c.closePath();
+  };
+  c.fillStyle = CH.print; fwPath(); c.fill();
+  c.save(); fwPath(); c.clip();
+  for (let i = 0; i < fwTips.length; i++) {
+    const t = fwTips[i], r0 = [196 - i*4, 270 + i*18];
+    c.fillStyle = i % 2 ? CH.erase : CH.counter;
+    c.beginPath(); c.moveTo(r0[0] + 6, r0[1] - 10); c.lineTo(t[0] - 4, t[1] - 9); c.lineTo(t[0] - 4, t[1] + 9); c.lineTo(r0[0] + 6, r0[1] + 10); c.closePath(); c.fill();
+    c.strokeStyle = CH.ink; c.lineWidth = 2.2; c.beginPath(); c.moveTo(r0[0] + 4, r0[1]); c.lineTo(t[0], t[1]); c.stroke();
+  }
+  c.restore();
+  c.strokeStyle = CH.ink; c.lineWidth = 3.5; c.lineJoin = 'round'; fwPath(); c.stroke();
+
+  // body
+  const body = spineBody(sp, wid);
+  c.fillStyle = CH.print; poly(c, body); c.fill();
+  c.save(); poly(c, body); c.clip();
+  // breast: paper with scalloped feathers
+  const br = []; for (let i = 0; i <= 30; i++) { const s = 0.1 + 0.6*i/30; br.push(off(sp, s, -wid(s)*1.1)); }
+  for (let i = 30; i >= 0; i--) { const s = 0.1 + 0.6*i/30; br.push(off(sp, s, -wid(s)*0.1 + 4*Math.sin(i/30*PI))); }
+  c.fillStyle = CH.erase; poly(c, br); c.fill();
+  c.strokeStyle = CH.ink; c.lineWidth = 1.8;
+  for (let s = 0.16, r = 0; s < 0.86; s += 0.05, r++) {
+    const p = sp.pt(s), m = sp.nrm(s), t = sp.tan(s), w = wid(s), ha = Math.atan2(-t[1], -t[0]);
+    for (let j = -4; j <= 4; j++) { const k = (j + (r % 2)*0.5) * 13; if (Math.abs(k) > w - 3) continue; c.beginPath(); c.arc(p[0] + m[0]*k, p[1] + m[1]*k, 7, ha - 1.3, ha + 1.3); c.stroke(); }
+  }
+  c.restore();
+  c.strokeStyle = CH.ink; c.lineWidth = 4.5; c.lineJoin = 'round'; poly(c, body); c.stroke();
+
+  // near wing (right), large, raised toward the right edge, primaries spread
+  const sh = off(sp, 0.42, 8);
+  const tips = [[392, 284], [404, 318], [408, 352], [400, 386], [380, 414]];
+  const root = [[300, 262], [312, 292], [318, 322], [316, 350], [304, 372]];
+  // coverts
+  const wing = [sh, [300, 250], ...tips.map((t, i) => t), [300, 394], [252, 352]];
+  c.fillStyle = CH.print; c.beginPath(); c.moveTo(sh[0], sh[1]);
+  c.bezierCurveTo(272, 250, 330, 236, 392, 284);
+  for (let i = 1; i < tips.length; i++) { const a = tips[i-1], b = tips[i]; c.quadraticCurveTo((a[0]+b[0])/2 - 22, (a[1]+b[1])/2, b[0], b[1]); }
+  c.bezierCurveTo(350, 404, 300, 392, 262, 360); c.closePath(); c.fill();
+  c.save(); c.clip();
+  // primaries in alternating counter / print with ink shafts
+  for (let i = 0; i < tips.length; i++) {
+    const r0 = root[i], t = tips[i];
+    c.fillStyle = i % 2 ? CH.counter : CH.erase;
+    c.beginPath(); c.moveTo(r0[0] - 8, r0[1] - 12); c.lineTo(t[0] + 4, t[1] - 10); c.lineTo(t[0] + 4, t[1] + 12); c.lineTo(r0[0] - 8, r0[1] + 14); c.closePath(); c.fill();
+    c.strokeStyle = CH.ink; c.lineWidth = 2.6; c.beginPath(); c.moveTo(r0[0] - 6, r0[1]); c.lineTo(t[0], t[1]); c.stroke();
+    c.lineWidth = 1.3;
+    for (let k = 0.15; k < 0.95; k += 0.09) { const x = r0[0] + (t[0]-r0[0])*k, y = r0[1] + (t[1]-r0[1])*k; c.beginPath(); c.moveTo(x, y); c.lineTo(x + 9, y + 10); c.stroke(); }
+  }
+  // covert scallops
+  c.strokeStyle = CH.ink; c.lineWidth = 2;
+  for (let r = 0; r < 4; r++) for (let k = 0; k < 6; k++) {
+    const x = 262 + r*12 + k*4, y = 276 + k*20 + r*4;
+    c.beginPath(); c.arc(x, y, 9, -0.2, PI*0.9); c.stroke();
+  }
+  c.restore();
+  c.strokeStyle = CH.ink; c.lineWidth = 4; c.beginPath(); c.moveTo(sh[0], sh[1]);
+  c.bezierCurveTo(272, 250, 330, 236, 392, 284);
+  for (let i = 1; i < tips.length; i++) { const a = tips[i-1], b = tips[i]; c.quadraticCurveTo((a[0]+b[0])/2 - 22, (a[1]+b[1])/2, b[0], b[1]); }
+  c.bezierCurveTo(350, 404, 300, 392, 262, 360); c.stroke();
+
+  // head
+  const hp = [168, 410];
+  // beak (counter)
+  c.fillStyle = CH.counter; c.beginPath(); c.moveTo(150, 392); c.quadraticCurveTo(116, 420, 92, 446); c.quadraticCurveTo(130, 436, 160, 428); c.closePath(); c.fill();
+  c.strokeStyle = CH.ink; c.lineWidth = 3.5; c.stroke();
+  c.lineWidth = 2; c.beginPath(); c.moveTo(152, 414); c.lineTo(108, 436); c.stroke();
+  dot(c, hp[0], hp[1], 34, CH.ink); dot(c, hp[0], hp[1], 30, CH.print);
+  // cheek patch
+  c.save(); c.beginPath(); c.arc(hp[0], hp[1], 30, 0, 2*PI); c.clip();
+  c.fillStyle = CH.erase; c.beginPath(); c.ellipse(hp[0] + 6, hp[1] + 18, 28, 14, -0.5, 0, 2*PI); c.fill();
+  c.restore();
+  eye(c, hp[0] - 6, hp[1] - 6, 9.5, [-0.7, 0.5]);
+  c.restore();
+}
+
+function drawMoth(c) {
+  c.fillStyle = CH.erase; c.fillRect(0, 0, TEX, TEX);
+  c.save(); kitePath(c, 6); c.clip();
+  c.strokeStyle = 'rgba(255,0,0,0.3)'; c.lineWidth = 1.3;
+  for (let k = 0; k < 40; k++) { c.beginPath(); c.arc(AX, AY, 14 + k*12, 0, PI); c.stroke(); }
+  const half = (sgn) => {
+    c.save(); c.translate(AX, 0); c.scale(sgn, 1);
+    // forewing: from the thorax out toward the base corner
+    c.save(); c.scale(0.86, 1);
+    const fw = new Path2D(); fw.moveTo(6, 250); fw.bezierCurveTo(60, 214, 150, 260, 214, 400); fw.bezierCurveTo(196, 426, 150, 436, 112, 420); fw.bezierCurveTo(70, 380, 30, 330, 6, 312); fw.closePath();
+    c.fillStyle = CH.print; c.fill(fw);
+    c.save(); c.clip(fw);
+    // banded veins
+    c.strokeStyle = CH.ink; c.lineWidth = 2;
+    for (let i = 0; i < 7; i++) { c.beginPath(); c.moveTo(8, 270 + i*6); c.quadraticCurveTo(80 + i*6, 300 + i*10, 120 + i*14, 440); c.stroke(); }
+    c.fillStyle = CH.erase; c.beginPath(); c.moveTo(60, 236); c.bezierCurveTo(110, 270, 150, 320, 210, 380); c.lineTo(200, 400); c.bezierCurveTo(140, 340, 100, 300, 50, 262); c.closePath(); c.fill();
+    c.lineWidth = 1.4;
+    for (let i = 0; i < 16; i++) { const x = 60 + i*9.5, y = 246 + i*9.2; c.beginPath(); c.moveTo(x, y); c.lineTo(x - 8, y + 12); c.stroke(); }
+    // eye-spot
+    dot(c, 128, 360, 26, CH.ink); dot(c, 128, 360, 22, CH.counter); dot(c, 128, 360, 12, CH.ink); dot(c, 124, 355, 4.5, CH.erase);
+    c.restore();
+    c.strokeStyle = CH.ink; c.lineWidth = 4; c.lineJoin = 'round'; c.stroke(fw);
+    c.restore();
+    // hindwing toward the apex side
+    c.save(); c.scale(0.8, 1);
+    const hw = new Path2D(); hw.moveTo(6, 240); hw.bezierCurveTo(30, 180, 80, 160, 100, 200); hw.bezierCurveTo(110, 228, 70, 250, 6, 262); hw.closePath();
+    c.fillStyle = CH.counter; c.fill(hw);
+    c.save(); c.clip(hw); c.strokeStyle = CH.ink; c.lineWidth = 1.6;
+    for (let i = 0; i < 8; i++) { c.beginPath(); c.moveTo(8, 250); c.lineTo(40 + i*12, 150 + i*12); c.stroke(); }
+    c.restore();
+    c.lineWidth = 3.5; c.stroke(hw);
+    c.restore();
+    // antenna: feathered, toward the apex
+    c.strokeStyle = CH.ink; c.lineWidth = 2.6; c.beginPath(); c.moveTo(4, 196); c.quadraticCurveTo(14, 140, 34, 108); c.stroke();
+    c.lineWidth = 1.4;
+    for (let k = 0; k < 10; k++) { const s = k/10, x = 4 + 30*s, y = 196 - 88*s; c.beginPath(); c.moveTo(x, y); c.lineTo(x + 10, y + 3); c.stroke(); }
+    c.restore();
+  };
+  half(1); half(-1);
+  // body: head toward apex, abdomen toward base
+  dot(c, AX, 214, 15, CH.ink); dot(c, AX, 214, 11, CH.print);
+  eye(c, AX - 7, 208, 4.5, [0, -1]); eye(c, AX + 7, 208, 4.5, [0, -1]);
+  c.fillStyle = CH.ink; c.beginPath(); c.ellipse(AX, 262, 19, 38, 0, 0, 2*PI); c.fill();
+  c.fillStyle = CH.print; c.beginPath(); c.ellipse(AX, 262, 15, 34, 0, 0, 2*PI); c.fill();
+  c.strokeStyle = CH.ink; c.lineWidth = 1.6; for (let k = -2; k <= 2; k++) { c.beginPath(); c.moveTo(AX + k*5, 236); c.lineTo(AX + k*6, 290); c.stroke(); }
+  for (let i = 0; i < 7; i++) {
+    const y = 302 + i*17, r = 15 - i*1.6;
+    c.fillStyle = CH.ink; c.beginPath(); c.ellipse(AX, y, r + 3, 11, 0, 0, 2*PI); c.fill();
+    c.fillStyle = i % 2 ? CH.counter : CH.erase; c.beginPath(); c.ellipse(AX, y, r, 8, 0, 0, 2*PI); c.fill();
+  }
+  c.restore();
+}
+
+const MOTIFS = { fish: drawFish, bird: drawBird, moth: drawMoth };
+function loadMotif(name) {
+  st.motif = name;
+  MOTIFS[name](dctx);
+  texDirty = padDirty = needs = true;
+}
+
+// ---------- the pad: decode the data canvas into print colours ----------
+const pad = $('pad'), pctx = pad.getContext('2d');
+const padImg = pctx.createImageData(TEX, TEX);
+const mask = new Float32Array(TEX * TEX);
+(() => {
+  const s = Math.sin(BETA), cB = Math.cos(BETA);
+  for (let y = 0; y < TEX; y++) for (let x = 0; x < TEX; x++) {
+    const px = x + 0.5, py = y + 0.5;
+    const dBase = AY + TH - py;
+    const dx = Math.abs(px - AX), dSide = (py - AY) * s - dx * cB;
+    mask[y*TEX + x] = Math.max(0, Math.min(1, Math.min(dBase, dSide) + 0.5));
+  }
+})();
+function drawPad() {
+  const src = dctx.getImageData(0, 0, TEX, TEX).data, out = padImg.data;
+  const kal = st.mode === 'kal', bg = [27, 29, 33];
+  for (let i = 0, n = TEX*TEX; i < n; i++) {
+    const j = i*4, ink = src[j]/255, pap = src[j+1]/255, cc = src[j+2]/255, rest = Math.max(0, 1 - ink - pap - cc);
+    let m = mask[i];
+    const x = i % TEX;
+    const dimL = kal && x < AX ? 0.42 : 1;
+    for (let k = 0; k < 3; k++) {
+      const v = COL.teal[k]*rest + COL.ink[k]*ink + COL.paper[k]*pap + COL.brick[k]*cc;
+      const vv = bg[k] + (v - bg[k]) * dimL;
+      out[j+k] = bg[k] + (vv - bg[k]) * m;
+    }
+    out[j+3] = 255;
+  }
+  pctx.putImageData(padImg, 0, 0);
+  // cell outline and angle labels
+  pctx.save();
+  pctx.strokeStyle = 'rgba(232,228,216,0.75)'; pctx.lineWidth = 2;
+  kitePath(pctx, 0); pctx.stroke();
+  pctx.setLineDash([6, 6]); pctx.strokeStyle = kal ? 'rgba(232,228,216,0.85)' : 'rgba(232,228,216,0.28)';
+  pctx.beginPath(); pctx.moveTo(AX, AY); pctx.lineTo(AX, AY + TH); pctx.stroke(); pctx.setLineDash([]);
+  pctx.fillStyle = 'rgba(232,228,216,0.85)'; pctx.font = '500 19px "IBM Plex Mono", monospace'; pctx.textAlign = 'center';
+  const P = G.P, Q = G.Q;
+  if (kal) {
+    pctx.fillText(`π/${P}`, AX + 40, AY + 10);
+    pctx.fillText('π/2', AX + 30, AY + TH + 32);
+    pctx.fillText(`π/${Q}`, AX + TH*TB - 30, AY + TH + 32);
+    pctx.fillText('mirror', AX - 120, AY + 30);
+  } else {
+    pctx.fillText(`2π/${P}`, AX + 52, AY + 10);
+    pctx.fillText('π', AX, AY + TH + 32);
+    pctx.fillText(`π/${Q}`, AX + TH*TB - 30, AY + TH + 32);
+    pctx.fillText(`π/${Q}`, AX - TH*TB + 30, AY + TH + 32);
+  }
+  pctx.restore();
+}
+
+// ---------- painting ----------
+const undoStack = [];
+function pushUndo() { undoStack.push(dctx.getImageData(0, 0, TEX, TEX)); if (undoStack.length > 30) undoStack.shift(); }
+function stroke(a, b) {
+  dctx.save(); kitePath(dctx, 0); dctx.clip();
+  dctx.strokeStyle = CH[st.brush]; dctx.fillStyle = CH[st.brush];
+  dctx.lineWidth = st.size; dctx.lineCap = 'round'; dctx.lineJoin = 'round';
+  if (!b) { dctx.beginPath(); dctx.arc(a[0], a[1], st.size / 2, 0, 2*PI); dctx.fill(); }
+  else { dctx.beginPath(); dctx.moveTo(a[0], a[1]); dctx.lineTo(b[0], b[1]); dctx.stroke(); }
+  dctx.restore();
+  texDirty = padDirty = needs = true;
+}
+function padPoint(e) { const r = pad.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * TEX, (e.clientY - r.top) / r.height * TEX]; }
+let padLast = null;
+pad.addEventListener('pointerdown', (e) => { pad.setPointerCapture(e.pointerId); pushUndo(); padLast = padPoint(e); stroke(padLast); e.preventDefault(); });
+pad.addEventListener('pointermove', (e) => { if (!padLast) return; const p = padPoint(e); stroke(padLast, p); padLast = p; });
+const padEnd = () => { padLast = null; };
+pad.addEventListener('pointerup', padEnd); pad.addEventListener('pointercancel', padEnd);
+
+// screen point -> pad texel via the same fold the shader runs
+function screenToPad(x, y) {
+  const w = screenToModel(x, y); if (!w) return null;
+  const { w: f, seq } = foldSeq(G, w);
+  const odd = seq.length % 2 === 1;
+  const ph = Math.max(0, Math.min(G.S, Math.atan2(f[1], f[0])));
+  const u = ph / G.S, v = Math.min(1, Math.hypot(f[0], f[1]) / hit(G, ph));
+  const ang = (st.mode === 'rot' && odd ? -1 : 1) * u * BETA;
+  return [AX + v*TH*Math.tan(ang), AY + v*TH];
+}
+
+// ---------- plate interaction ----------
+let drag = null, fling = [0, 0], flingT = 0;
+canvas.addEventListener('pointerdown', (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  if (st.platePaint) { pushUndo(); const p = screenToPad(e.clientX, e.clientY); drag = { paint: true, last: p, sx: e.clientX, sy: e.clientY }; if (p) stroke(p); return; }
+  drag = { x: e.clientX, y: e.clientY, t: performance.now() }; fling = [0, 0];
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  if (drag.paint) {
+    // walk the screen segment in small steps; tile edges make the pad jump, so only join close samples
+    const x0 = drag.sx, y0 = drag.sy, n = Math.max(1, Math.ceil(Math.hypot(e.clientX - x0, e.clientY - y0) / 1.5));
+    for (let i = 1; i <= n; i++) {
+      const p = screenToPad(x0 + (e.clientX - x0) * i / n, y0 + (e.clientY - y0) * i / n);
+      if (p && drag.last && Math.hypot(p[0] - drag.last[0], p[1] - drag.last[1]) < st.size * 1.2) stroke(drag.last, p); else if (p) stroke(p);
+      drag.last = p;
+    }
+    drag.sx = e.clientX; drag.sy = e.clientY; return;
+  }
+  const now = performance.now(), dt = Math.max(1, now - drag.t);
+  moveBy(drag.x, drag.y, e.clientX, e.clientY);
+  fling = [(e.clientX - drag.x) / dt * 1000, (e.clientY - drag.y) / dt * 1000];
+  drag.x = e.clientX; drag.y = e.clientY; drag.t = now;
+});
+const endDrag = () => { if (drag && !drag.paint && performance.now() - drag.t > 80) fling = [0, 0]; drag = null; };
+canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag);
+
+// content under (x0,y0) moves to (x1,y1)
+function moveBy(x0, y0, x1, y1) {
+  if (G.kind === 0) {
+    const R = ballR(), dx = (x1 - x0) / R, dy = -(y1 - y0) / R, a = Math.hypot(dx, dy);
+    if (a < 1e-9) return;
+    const Q = rotAxis([-dy / a, dx / a, 0], a);
+    Rot = orthon(m3mul(Rot, m3T(Q)));
+  } else if (G.kind === 2) {
+    let z0 = screenZ(x0, y0), z1 = screenZ(x1, y1);
+    const clamp = (z) => { const r = Math.hypot(z[0], z[1]); return r > 0.97 ? [z[0]*0.97/r, z[1]*0.97/r] : z; };
+    z0 = clamp(z0); z1 = clamp(z1);
+    const A1 = { a: [1,0], b: [-z1[0], -z1[1]], c: [-z1[0], z1[1]], d: [1,0] };   // z1 -> 0
+    const T = mm(diskT(z0), A1);                                                 // z1 -> z0
+    M = mnorm(mm(M, T));
+  } else {
+    const z0 = screenZ(x0, y0), z1 = screenZ(x1, y1);
+    M = mnorm(mm(M, { a: [1,0], b: [z0[0] - z1[0], z0[1] - z1[1]], c: [0,0], d: [1,0] }));
+  }
+  needs = true;
+}
+
+// ---------- controls ----------
+const PRESETS = [[4,3],[5,3],[4,4],[6,3],[7,3],[8,3],[5,4],[6,4]];
+const presetsEl = $('presets');
+for (const [p, q] of PRESETS) {
+  const b = document.createElement('button'); b.className = 'btn';
+  const k = 1/p + 1/q - 0.5;
+  b.innerHTML = `{${p},${q}} <small>${Math.abs(k) < 1e-9 ? 'plane' : k > 0 ? 'sphere' : 'disk'}</small>`;
+  b.dataset.p = p; b.dataset.q = q;
+  b.addEventListener('click', () => setPQ(p, q));
+  presetsEl.appendChild(b);
+}
+function setPQ(p, q, instant) {
+  p = Math.max(3, Math.min(12, p)); q = Math.max(3, Math.min(12, q));
+  if (p === st.p && q === st.q && G) return;
+  st.p = p; st.q = q;
+  if (instant || reduceMotion) applyGeom(); else { pendingGeom = true; dimTarget = 1; }
+  syncUI();
+}
+function applyGeom() {
+  const prevKind = G && G.kind;
+  G = makeGeom(st.p, st.q, st.mode);
+  if (prevKind !== G.kind) M = ident();
+  else M = mnorm(M);
+  if (G.kind !== 0) { M = ident(); }
+  padDirty = needs = true;
+  updateCaption();
+}
+function syncUI() {
+  $('pOut').textContent = st.p; $('qOut').textContent = st.q;
+  const k = 1/st.p + 1/st.q - 0.5;
+  const name = Math.abs(k) < 1e-9 ? 'flat plane' : k > 0 ? 'sphere' : 'hyperbolic';
+  const sgn = Math.abs(k) < 1e-9 ? '0' : (k > 0 ? '+' : '−') + Math.abs(k).toFixed(4);
+  $('curv').innerHTML = `1/${st.p} + 1/${st.q} − 1/2 = <b>${sgn}</b>`;
+  const gn = $('geoName'); gn.textContent = name; gn.className = 'geo-name' + (k < -1e-9 ? ' hyp' : Math.abs(k) < 1e-9 ? ' flat' : '');
+  for (const b of presetsEl.children) b.setAttribute('aria-pressed', String(+b.dataset.p === st.p && +b.dataset.q === st.q));
+  $('mRot').setAttribute('aria-pressed', String(st.mode === 'rot'));
+  $('mKal').setAttribute('aria-pressed', String(st.mode === 'kal'));
+  $('lines').setAttribute('aria-pressed', String(st.lines));
+  $('platePaint').setAttribute('aria-pressed', String(st.platePaint));
+  canvas.style.cursor = st.platePaint ? 'crosshair' : 'grab';
+  document.querySelectorAll('[data-motif]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.motif === st.motif)));
+  document.querySelectorAll('[data-brush]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.brush === st.brush)));
+  $('modeNote').textContent = st.mode === 'rot'
+    ? 'Turns only. The cell is two triangles; mirror-image tiles read the other half, so no creature is ever flipped, which is what lets a whole shoal swim one way, as in Circle Limit III.'
+    : 'Every mirror line reflects. Only the right half of the cell is used; each tile is the mirror image of its neighbour.';
+}
+function updateCaption() {
+  const k = 1/st.p + 1/st.q - 0.5;
+  const name = Math.abs(k) < 1e-9 ? 'euclidean plane' : k > 0 ? 'sphere' : 'poincaré disk';
+  const n = G.kind === 0 ? ` · ${groupOrder()} cells` : '';
+  const one = G.colMode === 2 ? `<br>one colour: ${st.p} and ${st.q} are both odd` : '';
+  $('caption').innerHTML = `<b>{${st.p},${st.q}}</b> · ${name}${n}<span class="more"><br>${st.mode === 'rot' ? 'rotation group' : 'full reflection group'}${one}</span>`;
+}
+function groupOrder() { // number of cells on the sphere
+  const tri = 4 / (1/st.p + 1/st.q - 0.5);   // 2-sphere area 4π / triangle area (π/p+π/q-π/2)
+  return Math.round(st.mode === 'rot' ? tri / 2 : tri);
+}
+$('pDec').onclick = () => setPQ(st.p - 1, st.q);
+$('pInc').onclick = () => setPQ(st.p + 1, st.q);
+$('qDec').onclick = () => setPQ(st.p, st.q - 1);
+$('qInc').onclick = () => setPQ(st.p, st.q + 1);
+$('mRot').onclick = () => { st.mode = 'rot'; applyGeom(); syncUI(); };
+$('mKal').onclick = () => { st.mode = 'kal'; applyGeom(); syncUI(); };
+$('lines').onclick = () => { st.lines = !st.lines; needs = true; syncUI(); };
+$('platePaint').onclick = () => { st.platePaint = !st.platePaint; syncUI(); };
+document.querySelectorAll('[data-motif]').forEach(b => b.onclick = () => { pushUndo(); loadMotif(b.dataset.motif); syncUI(); });
+document.querySelectorAll('[data-brush]').forEach(b => b.onclick = () => { st.brush = b.dataset.brush; syncUI(); });
+$('size').oninput = (e) => { st.size = +e.target.value; };
+$('speed').value = st.speed;
+$('speed').oninput = (e) => { st.speed = +e.target.value; };
+$('undo').onclick = () => { const s = undoStack.pop(); if (s) { dctx.putImageData(s, 0, 0); texDirty = padDirty = needs = true; } };
+$('clear').onclick = () => { pushUndo(); dctx.fillStyle = CH.erase; dctx.fillRect(0, 0, TEX, TEX); texDirty = padDirty = needs = true; };
+addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); $('undo').click(); }
+});
+$('railToggle').onclick = () => {
+  const c = rail.classList.toggle('collapsed');
+  $('railToggle').textContent = c ? 'show' : 'hide';
+  $('railToggle').setAttribute('aria-expanded', String(!c));
+  const t = targetLayout(); view.tcx = t.cx; view.tcy = t.cy; view.tR = t.R; needs = true;
+};
+addEventListener('resize', resize);
+
+// ---------- frame loop ----------
+let lastT = performance.now(), clock = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now; clock += dt;
+  // ease layout
+  const e = 1 - Math.pow(0.0005, dt);
+  if (Math.abs(view.cx - view.tcx) + Math.abs(view.cy - view.tcy) + Math.abs(view.R - view.tR) > 0.05) {
+    view.cx += (view.tcx - view.cx) * e; view.cy += (view.tcy - view.cy) * e; view.R += (view.tR - view.R) * e; needs = true;
+  }
+  // geometry change: dip to ink, swap, rise
+  if (dimTarget !== dim) {
+    const sp = dt / 0.16;
+    dim = dimTarget > dim ? Math.min(dimTarget, dim + sp) : Math.max(dimTarget, dim - sp * 0.75);
+    if (dim >= 1 && pendingGeom) { pendingGeom = null; applyGeom(); dimTarget = 0; }
+    needs = true;
+  }
+  // ambient drift + fling
+  const sp = st.speed;
+  if (!drag) {
+    if (Math.hypot(fling[0], fling[1]) > 2) {
+      const cx = view.cx, cy = view.cy;
+      moveBy(cx, cy, cx + fling[0]*dt, cy + fling[1]*dt);
+      const k = Math.pow(0.12, dt); fling[0] *= k; fling[1] *= k;
+    }
+    if (sp > 0) {
+      const a = clock * 0.07, R = view.R;
+      if (G.kind === 0) { moveBy(view.cx, view.cy, view.cx + Math.cos(a*0.6)*R*0.09*sp*dt*1.4, view.cy + Math.sin(a*0.6 + 1)*R*0.05*sp*dt*1.4); }
+      else if (G.kind === 2) { const v = R * 0.07 * sp * dt; moveBy(view.cx, view.cy, view.cx + Math.cos(a)*v, view.cy + Math.sin(a)*v); }
+      else { const v = R * 0.06 * sp * dt; moveBy(view.cx, view.cy, view.cx + Math.cos(a)*v, view.cy + Math.sin(a)*v); }
+    }
+  }
+  reduceCamera();
+  if (padDirty) { drawPad(); padDirty = false; }
+  if (gl && (needs || sp > 0)) render();
+  needs = false;
+  requestAnimationFrame(frame);
+}
+function render() {
+  if (texDirty) {
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    texDirty = false;
+  }
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.uniform1f(U.uDpr, view.dpr);
+  gl.uniform2f(U.uCenter, view.cx, view.h - view.cy);
+  gl.uniform1f(U.uRad, view.R); gl.uniform1f(U.uBall, ballR()); gl.uniform1f(U.uPlane, plateScale());
+  gl.uniform1i(U.uKind, G.kind); gl.uniform1i(U.uRotMode, st.mode === 'rot' ? 1 : 0); gl.uniform1i(U.uColMode, G.colMode);
+  gl.uniform1f(U.uS, G.S); gl.uniform1f(U.uC, G.C); gl.uniform1f(U.uR, G.R); gl.uniform1f(U.uEC, G.EC);
+  gl.uniform2f(U.uN2, G.n2[0], G.n2[1]);
+  gl.uniform1f(U.uLines, st.lines ? 1 : 0); gl.uniform1f(U.uDim, dim);
+  gl.uniform4f(U.uMab, M.a[0], M.a[1], M.b[0], M.b[1]);
+  gl.uniform4f(U.uMcd, M.c[0], M.c[1], M.d[0], M.d[1]);
+  gl.uniformMatrix3fv(U.uRot, false, m3T(Rot));
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+// ---------- boot ----------
+G = makeGeom(st.p, st.q, st.mode);
+loadMotif('fish');
+syncUI(); updateCaption();
+resize();
+requestAnimationFrame(frame);
+window.__geo = { setPQ: (p, q) => setPQ(p, q, true), st, moveBy, mode: (m) => { st.mode = m; applyGeom(); syncUI(); }, motif: (m) => { loadMotif(m); syncUI(); }, lines: (v) => { st.lines = v; needs = true; syncUI(); } };
+})();
+</script>
+</body>
+</html>
